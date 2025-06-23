@@ -32,11 +32,17 @@
 ## 📦 Folder Structure
 
 trenches/
+
 ├── agents/ # Agent logic, YAML specs, runner script
+
 ├── backend/ # Go-based TrenchCore API
+
 ├── ops/ # Docker Compose and infra scripts
+
 ├── data/ # Optional: dataset mocks or Parquet logs
+
 ├── .github/ # CI/CD workflows
+
 └── README.md # This file
 
 
