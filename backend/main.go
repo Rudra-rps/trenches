@@ -46,7 +46,12 @@ func main() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		_, err := db.NamedExec(`INSERT INTO tweets (agent_id, content, thread_id) VALUES (:agent_id, :content, :thread_id)`, &tweet)
+		err := db.QueryRowx(
+			`INSERT INTO tweets (agent_id, content, thread_id) 
+	 VALUES ($1, $2, $3) RETURNING id`,
+			tweet.AgentID, tweet.Content, tweet.ThreadID,
+		).Scan(&tweet.ID)
+
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
