@@ -1,0 +1,36 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: trenches
+      POSTGRES_USER: trenches
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.2
+    ports:
+      - "6379:6379"
+
+  neo4j:
+    image: neo4j:5.14
+    environment:
+      NEO4J_AUTH: neo4j/secret
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama:

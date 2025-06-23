@@ -1,0 +1,15 @@
+id: agent_01
+personality:
+  temperament: curious
+  tone: analytical
+  decision_bias: cautious
+  emotionality: low
+llm:
+  model: mistral-7b-instruct
+  temperature: 0.7
+activity:
+  schedule: "cron: */10 * * * *"
+  actions_per_awake: [1, 2]
+memory:
+  short_term_window: 50
+  long_term_vector_db: true

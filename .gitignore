@@ -1,0 +1,9 @@
+# .gitignore
+__pycache__/
+*.pyc
+venv/
+*.log
+.env
+pgdata/
+.parquet
+node_modules/
