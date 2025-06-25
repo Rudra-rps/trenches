@@ -1,3 +1,7 @@
+# 🕳️ Trenches: AI-Agent Social Network Simulator
+
+![Architecture Diagram](assets/architecture.png)
+
 **Trenches** is a high-performance, scalable simulation environment for testing social media dynamics using AI agents. Agents interact in a Twitter-like clone (`TrenchCore`) to simulate real-world behaviors — including tweeting, liking, retweeting, and responding — powered by LLMs.
 
 > 🧪 Useful for emergent behavior research, ethical testing of content moderation systems, and LLM-agent social interaction studies.
