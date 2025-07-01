@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
@@ -26,6 +28,20 @@ type Profile struct {
 }
 
 var db *sqlx.DB
+
+func logEvent(event any) {
+	log.Println("Logging event:", event)
+	file, err := os.OpenFile("events.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Println("Failed to open events log:", err)
+		return
+	}
+	defer file.Close()
+
+	bytes, _ := json.Marshal(event)
+	file.Write(bytes)
+	file.Write([]byte("\n"))
+}
 
 func main() {
 	var err error
@@ -76,6 +92,8 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		// ✅ Log event
+		logEvent(tweet)
 
 		c.JSON(http.StatusCreated, gin.H{"status": "tweet posted", "tweet": tweet})
 	})
@@ -98,6 +116,8 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		// ✅ Log event
+		logEvent(map[string]any{"action": "like", "tweet_id": id})
 		c.JSON(http.StatusOK, gin.H{"status": "tweet liked"})
 	})
 
@@ -109,6 +129,8 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		logEvent(map[string]any{"action": "retweet", "tweet_id": id})
+
 		c.JSON(http.StatusOK, gin.H{"status": "tweet retweeted"})
 	})
 
@@ -132,6 +154,9 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+
+		// ✅ Log event
+		logEvent(tweet)
 
 		c.JSON(http.StatusCreated, gin.H{"status": "reply posted", "tweet": tweet})
 	})
