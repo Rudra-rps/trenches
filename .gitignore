@@ -1,9 +1,30 @@
-# .gitignore
+# Python
 __pycache__/
 *.pyc
 venv/
-*.log
-.env
-pgdata/
-.parquet
+
+# Node
 node_modules/
+
+# Go
+/app
+*.exe
+
+# Data / Logs
+*.log
+events.jsonl
+.parquet
+
+# DB volumes
+pgdata/
+
+# Env / Secrets
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db

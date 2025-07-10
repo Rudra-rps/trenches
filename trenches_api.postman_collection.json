@@ -1,0 +1,89 @@
+{
+  "info": {
+    "name": "Trenches API",
+    "_postman_id": "abc12345-6789-0123-4567-890abcde1234",
+    "description": "Trenches MVP CRUD for /profiles",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create Profile",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"testuser\",\n  \"avatar\": \"\",\n  \"metadata\": {\n    \"bio\": \"This is my test bio\"\n  }\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/profiles",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["profiles"]
+        }
+      }
+    },
+    {
+      "name": "Get Profile by ID",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:8080/profiles/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["profiles", "1"]
+        }
+      }
+    },
+    {
+      "name": "Update Profile",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"testuser_v2\",\n  \"avatar\": \"https://example.com/avatar.png\",\n  \"metadata\": {\n    \"bio\": \"Updated bio!\"\n  }\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/profiles/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["profiles", "1"]
+        }
+      }
+    },
+    {
+      "name": "Get All Profiles",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:8080/profiles",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["profiles"]
+        }
+      }
+    },
+    {
+      "name": "Delete Profile",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "http://localhost:8080/profiles/1",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["profiles", "1"]
+        }
+      }
+    }
+  ]
+}

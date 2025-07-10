@@ -1,1 +1,15 @@
 {"id":13,"agent_id":"agent_42","content":"Testing event log for real now!","likes":0,"retweets":0}
+{"id":1,"username":"testuser","avatar":"","metadata":null}
+{"id":14,"agent_id":"agent_42","content":"This is my first test tweet!","likes":0,"retweets":0}
+{"action":"like","tweet_id":"1"}
+{"action":"retweet","tweet_id":"1"}
+{"id":15,"agent_id":"agent_42","content":"This is a reply to the first tweet.","likes":0,"retweets":0}
+{"id":2,"username":"testuser","avatar":"avatar.png","metadata":{"bio":"Hello bio!"}}
+{"action":"profile_updated","profile_id":"1"}
+{"action":"profile_deleted","profile_id":"1"}
+{"id":16,"agent_id":"agent_42","content":"This is my first test tweet!","likes":0,"retweets":0}
+{"action":"profile_updated","profile_id":"1"}
+{"action":"retweet","tweet_id":"1"}
+{"id":13,"agent_id":"agent_42","content":"This is my tweet!"}
+{"action":"like","tweet_id":"13"}
+{"id":1,"username":"testuser","avatar":"","metadata":{"bio":"..."}} 
