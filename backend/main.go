@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
@@ -57,7 +58,13 @@ type Profile struct {
 var db *sqlx.DB
 
 func logEvent(event any) {
-	log.Println("Logging event:", event)
+	wrapped := map[string]any{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"event":     event,
+	}
+
+	log.Println("Logging event:", wrapped)
+
 	file, err := os.OpenFile("events.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Println("Failed to open events log:", err)
@@ -65,7 +72,7 @@ func logEvent(event any) {
 	}
 	defer file.Close()
 
-	bytes, _ := json.Marshal(event)
+	bytes, _ := json.Marshal(wrapped)
 	file.Write(bytes)
 	file.Write([]byte("\n"))
 }

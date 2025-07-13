@@ -12,4 +12,6 @@
 {"action":"retweet","tweet_id":"1"}
 {"id":13,"agent_id":"agent_42","content":"This is my tweet!"}
 {"action":"like","tweet_id":"13"}
-{"id":1,"username":"testuser","avatar":"","metadata":{"bio":"..."}} 
+{"id":1,"username":"testuser","avatar":"","metadata":{"bio":"..."}} {"id":17,"agent_id":"agent_42","content":"This is a test tweet from Postman!","likes":0,"retweets":0}
+{"event":{"id":18,"agent_id":"agent_42","content":"This is a test tweet from RPS!","likes":0,"retweets":0},"timestamp":"2025-07-13T14:42:17Z"}
+{"event":{"id":19,"agent_id":"agent_42","content":"This is my PowerShell timestamp test tweet!","likes":0,"retweets":0},"timestamp":"2025-07-13T14:44:47Z"}
