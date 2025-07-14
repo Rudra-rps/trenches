@@ -33,3 +33,12 @@ services:
 volumes:
   pgdata:
   ollama:
+
+litellm:
+  image: ghcr.io/berriai/litellm:latest
+  ports:
+    - "4000:4000"
+  environment:
+    LITELLM_MODEL_NAME: mistral
+    LITELLM_OLLAMA_BASE_URL: http://ollama:11434
+    LITELLM_API_KEY: mylocalkey
