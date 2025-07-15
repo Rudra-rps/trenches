@@ -5,7 +5,7 @@ personality:
   decision_bias: thoughtful
   emotionality: medium
 llm:
-  model: anthropic/claude-3-sonnet
+  model: moonshotai/kimi-k2:free
   temperature: 0.7
 activity:
   schedule: "cron: */15 * * * *"

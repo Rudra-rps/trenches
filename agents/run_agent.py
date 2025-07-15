@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
@@ -68,16 +69,24 @@ class TrenchesAgent:
         personality = agent.get('personality', {})
         agent_id = agent.get('id', 'unknown')
 
-        prompt = f"""You are {agent_id}, a software engineer with these personality traits:
-- Temperament: {personality.get('temperament', 'neutral')}
-- Tone: {personality.get('tone', 'neutral')}
-- Emotionality: {personality.get('emotionality', 'medium')}
+        # Extract all personality traits from the agent config
+        temperament = personality.get('temperament', 'neutral')
+        tone = personality.get('tone', 'neutral')
+        emotionality = personality.get('emotionality', 'medium')
+        decision_bias = personality.get('decision_bias', 'balanced')
 
-Generate a tweet (max 280 characters) that reflects your personality.
-Focus on software engineering, debugging, or tech insights.
-Be authentic to your character traits.
-Use appropriate emojis and hashtags when relevant.
-"""
+        prompt = f"""You are {agent_id}, with these personality traits:
+    - Temperament: {temperament}
+    - Tone: {tone}
+    - Emotionality: {emotionality}
+    - Decision Bias: {decision_bias}
+
+    Generate a tweet (max 280 characters) that reflects your personality.
+    You can tweet about any topic that interests you - technology, life observations,
+    current events, personal thoughts, humor, philosophy, or anything else.
+    Be authentic to your character traits and speak in your unique voice.
+    Use appropriate emojis and hashtags when relevant.
+    """
 
         if recent_tweets:
             tweet_context = "\n".join([f"- {t.get('content', '')[:50]}" for t in recent_tweets[:3]])
@@ -86,119 +95,69 @@ Use appropriate emojis and hashtags when relevant.
         prompt += "\nYour tweet:"
         return prompt
 
-    def _generate_with_openrouter(self, prompt: str) -> str:
-        """Generate using OpenRouter API"""
+    def _generate_with_openrouter(self, agent: Dict, prompt: str) -> str:
+        """Generate using OpenRouter API via OpenAI SDK"""
+        # Get configuration
+        agent_llm = agent.get('llm', {})
+        model = agent_llm.get('model', self.llm_config.get('model', 'openai/gpt-3.5-turbo'))
+        temperature = agent_llm.get('temperature', self.llm_config.get('temperature', 0.7))
+
+        # Get API key and ensure it's properly formatted
         api_key = self.llm_config.get('api_key') or os.getenv('OPENROUTER_API_KEY')
         if not api_key:
             raise ValueError("OpenRouter API key not found")
 
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:8080",  # Optional
-            "X-Title": "Trenches Social Sim"  # Optional
-        }
+        # Make sure the API key is properly formatted (no whitespace)
+        api_key = api_key.strip()
 
-        payload = {
-            "model": self.llm_config.get('model', 'openai/gpt-3.5-turbo'),
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 100,
-            "temperature": self.llm_config.get('temperature', 0.7)
-        }
+        # Log connection attempt (limited key visibility for security)
+        if len(api_key) > 8:
+            visible_part = api_key[:4] + '...' + api_key[-4:]
+            logger.info(f"Connecting to OpenRouter with key starting with: {visible_part}")
 
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        response.raise_for_status()
+        try:
+            # Initialize OpenAI client with proper headers
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key,
+                default_headers={
+                    "HTTP-Referer": "https://trenches-social.com",
+                    "X-Title": "Trenches Social Sim"
+                }
+            )
 
-        result = response.json()
-        return result['choices'][0]['message']['content'].strip()
+            # Make the completion request
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=100
+            )
 
-    def _generate_with_templates(self, agent: Dict, recent_tweets: List[Dict] = None) -> str:
-        """Original template-based generation as fallback"""
-        personality_info = agent.get('personality', {})
-        temperament = personality_info.get('temperament', 'neutral')
-        tone = personality_info.get('tone', 'neutral')
-        emotionality = personality_info.get('emotionality', 'medium')
+            # Extract and format content
+            content = completion.choices[0].message.content.strip()
+            return content[:280] if len(content) > 280 else content
 
-        agent_id = agent.get('id', 'unknown')
+        except Exception as e:
+            error_message = str(e)
+            logger.error(f"OpenRouter API error: {error_message}")
 
-        # Content templates based on temperament and tone
-        content_templates = {
-            'curious_analytical': [
-                "Interesting pattern emerging in today's data... 🤔 #DataDriven",
-                "Question: What's the most underrated debugging technique? 🔍",
-                "Analyzing the correlation between code complexity and bug density...",
-                "Deep dive into performance metrics reveals some fascinating insights 📊"
-            ],
-            'curious_neutral': [
-                "Wonder what causes this particular edge case... 🤔",
-                "Exploring new approaches to this problem space",
-                "What's everyone's take on this architectural decision?",
-                "Investigating the root cause of today's production hiccup 🔍"
-            ],
-            'analytical_low': [
-                "Performance optimization complete: 23% improvement in latency",
-                "Static analysis reveals 12 potential code smell patterns",
-                "Metrics suggest we should refactor the authentication module",
-                "Code review findings: 3 critical, 7 minor issues identified"
-            ],
-            'cautious_analytical': [
-                "Before we deploy, let's double-check the rollback strategy...",
-                "Running additional tests to validate edge case handling",
-                "Careful consideration needed for this database migration",
-                "Triple-checking the security implications of this change 🔐"
-            ]
-        }
-
-        # Create composite key for personality matching
-        composite_key = f"{temperament}_{tone}"
-        if emotionality == 'low':
-            composite_key += f"_{emotionality}"
-
-        # Find best matching template
-        for key, templates in content_templates.items():
-            if composite_key in key or any(trait in key for trait in [temperament, tone]):
-                return random.choice(templates)
-
-        # Default templates based on individual traits
-        if temperament == 'curious':
-            defaults = [
-                "Hmm, this is an interesting problem to solve... 🤔",
-                "What's the best approach here? Looking for insights 💭",
-                "Exploring different solutions to today's challenge"
-            ]
-        elif tone == 'analytical':
-            defaults = [
-                "Breaking down the problem into smaller components",
-                "Data suggests we need to reconsider our approach",
-                "Systematic analysis of the current implementation"
-            ]
-        else:
-            defaults = [
-                f"Another day, another challenge in the trenches... #{agent_id}",
-                "Working through today's technical problems step by step",
-                "Progress update: steady improvements across the board 📈"
-            ]
-
-        return random.choice(defaults)
+            # More helpful error for authentication issues
+            if "401" in error_message:
+                raise ValueError(f"OpenRouter authentication failed. Please check your API key format and permissions. Error: {error_message}")
+            raise
 
     def generate_content(self, agent: Dict, recent_tweets: List[Dict] = None) -> str:
-        """Generate content using LLM or fallback to templates"""
-        use_llm = self.llm_config.get('enabled', False)
+        """Generate content using LLM only - no templates"""
+        agent_id = agent.get('id', 'unknown')
 
-        if use_llm:
-            try:
-                prompt = self._build_personality_prompt(agent, recent_tweets)
-                return self._generate_with_openrouter(prompt)
-            except Exception as e:
-                logger.warning(f"LLM generation failed, using templates: {e}")
-
-        # Fallback to existing template system
-        return self._generate_with_templates(agent, recent_tweets)
+        try:
+            prompt = self._build_personality_prompt(agent, recent_tweets)
+            content = self._generate_with_openrouter(agent, prompt)
+            return content
+        except Exception as e:
+            logger.error(f"❌ [{agent_id}] Failed to generate content: {e}")
+            raise Exception(f"Content generation failed for {agent_id}: {e}")
 
     def simulate_action(self, agent: Dict, recent_tweets: List[Dict] = None):
         """Simulate various agent actions"""
@@ -220,10 +179,21 @@ Use appropriate emojis and hashtags when relevant.
         num_actions = random.randint(actions_range[0], actions_range[1])
 
         for _ in range(num_actions):
-            # Define action probabilities (adjusted for analytical agents)
+            # Define action probabilities based on personality
             personality_info = agent.get('personality', {})
-            if personality_info.get('tone') == 'analytical':
+            temperament = personality_info.get('temperament', 'neutral')
+
+            # Adjust probabilities based on temperament
+            if temperament == 'analytical':
                 actions = {'tweet': 0.8, 'like': 0.1, 'retweet': 0.05, 'reply': 0.05}
+            elif temperament == 'sarcastic':
+                actions = {'tweet': 0.7, 'like': 0.1, 'retweet': 0.1, 'reply': 0.1}
+            elif temperament == 'optimistic':
+                actions = {'tweet': 0.5, 'like': 0.3, 'retweet': 0.15, 'reply': 0.05}
+            elif temperament == 'playful':
+                actions = {'tweet': 0.8, 'like': 0.1, 'retweet': 0.05, 'reply': 0.05}
+            elif temperament == 'contemplative':
+                actions = {'tweet': 0.9, 'like': 0.05, 'retweet': 0.03, 'reply': 0.02}
             else:
                 actions = {'tweet': 0.6, 'like': 0.2, 'retweet': 0.15, 'reply': 0.05}
 
@@ -231,10 +201,13 @@ Use appropriate emojis and hashtags when relevant.
             action = random.choices(list(actions.keys()), weights=list(actions.values()))[0]
 
             if action == 'tweet':
-                content = self.generate_content(agent, recent_tweets)
-                success = self.post_tweet(agent_id, content)
-                if success:
-                    logger.info(f"🐦 [{agent_id}] tweeted")
+                try:
+                    content = self.generate_content(agent, recent_tweets)
+                    success = self.post_tweet(agent_id, content)
+                    if success:
+                        logger.info(f"🐦 [{agent_id}] tweeted")
+                except Exception as e:
+                    logger.error(f"❌ [{agent_id}] Failed to tweet: {e}")
             else:
                 # For MVP, just log other actions
                 logger.info(f"📱 [{agent_id}] {action}d something...")
@@ -248,7 +221,6 @@ Use appropriate emojis and hashtags when relevant.
         try:
             response = requests.get(f"{self.backend_url}/ping", timeout=3)
             if response.status_code == 200:
-                # Handle both possible response formats
                 response_data = response.json()
                 return (response_data == "pong" or
                        (isinstance(response_data, dict) and response_data.get("message") == "pong"))
@@ -257,12 +229,25 @@ Use appropriate emojis and hashtags when relevant.
             return False
 
 def main():
-    # LLM configuration for OpenRouter
+    # Debug API key loading
+    api_key = os.getenv('OPENROUTER_API_KEY')
+    if not api_key:
+        logger.error("❌ OpenRouter API key not found in environment")
+        return
+    else:
+        # Only show first few chars for security
+        masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+        logger.info(f"✅ API key found: {masked_key}")
+
+        # Verify API key format
+        if not api_key.startswith("sk-"):
+            logger.warning("⚠️ API key doesn't start with 'sk-', may not be correctly formatted")
+
+    # LLM configuration for OpenRouter - global defaults
     llm_config = {
-        'enabled': True,  # Set to False to use templates only
-        'api_key': os.getenv('OPENROUTER_API_KEY'),  # Set this in your .env file
-        'model': 'openai/gpt-3.5-turbo',  # or 'anthropic/claude-3-sonnet', etc.
-        'temperature': 0.7
+        'api_key': api_key,
+        'model': 'openai/gpt-3.5-turbo',  # Using a widely available model
+        'temperature': 0.7  # Default fallback temperature
     }
 
     agent_runner = TrenchesAgent(llm_config=llm_config)
@@ -274,16 +259,7 @@ def main():
         return
 
     logger.info("✅ Connected to Trenches backend")
-
-    # Check LLM configuration
-    if llm_config['enabled']:
-        if llm_config['api_key']:
-            logger.info(f"🤖 LLM enabled: {llm_config['model']}")
-        else:
-            logger.warning("⚠️ LLM enabled but no API key found, falling back to templates")
-            llm_config['enabled'] = False
-    else:
-        logger.info("📝 Using template-based content generation")
+    logger.info("🤖 LLM-only mode enabled - using agent-specific models and configs")
 
     # Load all agent configs
     config_path = Path("agent_spec")

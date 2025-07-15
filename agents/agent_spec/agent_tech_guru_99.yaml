@@ -5,8 +5,7 @@ personality:
   decision_bias: logical
   emotionality: low
 llm:
-  model: openai/gpt-3.5-turbo
-  temperature: 0.6
+  model: moonshotai/kimi-k2:free
 activity:
   schedule: "cron: */8 * * * *"
   actions_per_awake: [1, 2]

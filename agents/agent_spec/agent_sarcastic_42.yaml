@@ -5,7 +5,7 @@ personality:
   decision_bias: humorous
   emotionality: high
 llm:
-  model: openai/gpt-3.5-turbo
+  model: moonshotai/kimi-k2:free
   temperature: 0.9
 activity:
   schedule: "cron: */5 * * * *"
