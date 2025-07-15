@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+OPENROUTER_API_KEY = os.getenv('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')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ Use appropriate emojis and hashtags when relevant.
             raise ValueError("OpenRouter API key not found")
 
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {"OPENROUTER_API_KEY"}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost:8080",  # Optional
             "X-Title": "Trenches Social Sim"  # Optional
