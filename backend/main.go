@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,18 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "tweet liked"})
 	})
 
+	// 👍 Get likes count for a tweet
+	r.GET("/tweets/:id/likes", func(c *gin.Context) {
+		id := c.Param("id")
+		var likes int
+		err := db.Get(&likes, "SELECT likes FROM tweets WHERE id=$1", id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Tweet not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"likes": likes})
+	})
+
 	// Retweet
 	r.POST("/tweets/:id/retweets", func(c *gin.Context) {
 		id := c.Param("id")
@@ -166,6 +179,18 @@ func main() {
 		}
 		logEvent(map[string]any{"action": "retweet", "tweet_id": id})
 		c.JSON(http.StatusOK, gin.H{"status": "tweet retweeted"})
+	})
+
+	// 🔁 Get retweets count for a tweet
+	r.GET("/tweets/:id/retweets", func(c *gin.Context) {
+		id := c.Param("id")
+		var retweets int
+		err := db.Get(&retweets, "SELECT retweets FROM tweets WHERE id=$1", id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Tweet not found"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"retweets": retweets})
 	})
 
 	// Reply
@@ -294,6 +319,77 @@ func main() {
 
 		logEvent(map[string]any{"action": "profile_deleted", "profile_id": id})
 		c.JSON(http.StatusOK, gin.H{"status": "profile deleted"})
+	})
+
+	// 🧾 Get stats for a specific tweet
+	r.GET("/tweets/:id/stats", func(c *gin.Context) {
+		id := c.Param("id")
+
+		var stats struct {
+			Likes    int `db:"likes" json:"likes"`
+			Retweets int `db:"retweets" json:"retweets"`
+			Replies  int `json:"replies"`
+		}
+
+		// Get likes and retweets
+		err := db.Get(&stats, "SELECT likes, retweets FROM tweets WHERE id=$1", id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Tweet not found"})
+			return
+		}
+
+		// Count replies to this tweet
+		err = db.Get(&stats.Replies, "SELECT COUNT(*) FROM tweets WHERE thread_id=$1", id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, stats)
+	})
+
+	// 🏆 Get all tweets with stats, ordered by likes + retweets
+	r.GET("/tweets/stats", func(c *gin.Context) {
+		var tweets []Tweet
+		err := db.Select(&tweets, "SELECT * FROM tweets ORDER BY (likes + retweets) DESC")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, tweets)
+	})
+
+	// 📁 Export all logged events (for analysis)
+	r.GET("/events/export", func(c *gin.Context) {
+		filePath := "events.jsonl"
+
+		// Check if the file exists
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "No events log found"})
+			return
+		}
+
+		c.Header("Content-Disposition", "attachment; filename=events.jsonl")
+		c.Header("Content-Type", "application/json")
+		c.File(filePath)
+	})
+
+	// 📰 Get timeline (latest tweets, limited)
+	r.GET("/timeline", func(c *gin.Context) {
+		limit := 20 // default
+		if l := c.Query("limit"); l != "" {
+			if parsed, err := strconv.Atoi(l); err == nil {
+				limit = parsed
+			}
+		}
+
+		var tweets []Tweet
+		err := db.Select(&tweets, "SELECT * FROM tweets ORDER BY id DESC LIMIT $1", limit)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, tweets)
 	})
 
 	// Start server
