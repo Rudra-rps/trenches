@@ -6,6 +6,7 @@ personality:
   emotionality: low
 llm:
   model: moonshotai/kimi-k2:free
+  temperature: 0.6
 activity:
   schedule: "cron: */8 * * * *"
   actions_per_awake: [1, 2]

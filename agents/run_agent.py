@@ -1,129 +1,716 @@
+import asyncio
+import aiohttp
 import time
 import random
 import yaml
-import requests
 import logging
 import os
+import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Union
+from dataclasses import dataclass, field
+from enum import Enum
 from dotenv import load_dotenv
 from openai import OpenAI
+import backoff
 
-# Load environment variables
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+class ActionType(Enum):
+    TWEET = "tweet"
+    LIKE = "like"
+    RETWEET = "retweet"
+    REPLY = "reply"
+    FOLLOW = "follow"
+
+@dataclass
+class SimulationConfig:
+    """Dynamic simulation configuration"""
+    rounds: int = 3
+    backend_url: str = "http://localhost:8080"
+    backend_timeout: int = 5
+    round_delay_range: List[int] = field(default_factory=lambda: [8, 15])
+    agent_delay_range: List[float] = field(default_factory=lambda: [1.0, 3.0])
+    context_tweets_limit: int = 5
+    max_concurrent_agents: int = 10
+    health_check_timeout: int = 3
+    request_timeout: int = 5
+
+    @classmethod
+    def from_file(cls, path: Path) -> 'SimulationConfig':
+        """Load configuration from file"""
+        if path.exists():
+            with open(path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+                return cls(**data)
+        return cls()
+
+    def save_to_file(self, path: Path):
+        """Save configuration to file"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
+            yaml.dump(self.__dict__, f, default_flow_style=False)
+
+@dataclass
+class LLMConfig:
+    """Dynamic LLM configuration"""
+    api_key: str = ""
+    base_url: str = "https://openrouter.ai/api/v1"
+    default_model: str = "moonshotai/kimi-k2:free"
+    default_temperature: float = 0.7
+    default_max_tokens: int = 100
+    request_timeout: int = 30
+    retry_attempts: int = 3
+    available_models: List[str] = field(default_factory=list)
+    default_headers: Dict[str, str] = field(default_factory=lambda: {
+        "HTTP-Referer": "https://trenches-social.com",
+        "X-Title": "Trenches Social Sim"
+    })
+
+    @classmethod
+    def from_env_and_file(cls, config_path: Path = None) -> 'LLMConfig':
+        """Load LLM config from environment and file"""
+        config = cls()
+
+        # Load from environment
+        config.api_key = os.getenv('OPENROUTER_API_KEY', '')
+        config.base_url = os.getenv('LLM_BASE_URL', config.base_url)
+        config.default_model = os.getenv('DEFAULT_LLM_MODEL', config.default_model)
+        config.default_temperature = float(os.getenv('DEFAULT_TEMPERATURE', config.default_temperature))
+        config.default_max_tokens = int(os.getenv('DEFAULT_MAX_TOKENS', config.default_max_tokens))
+
+        # Override with file if exists
+        if config_path and config_path.exists():
+            with open(config_path, 'r') as f:
+                file_config = yaml.safe_load(f) or {}
+                for key, value in file_config.items():
+                    if hasattr(config, key):
+                        setattr(config, key, value)
+
+        return config
+
+        def discover_models_from_agents(self, agents: Dict[str, Dict]) -> List[str]:
+                """Dynamically discover available models from agent configurations"""
+                models = set()
+
+                # Add default model
+                models.add(self.default_model)
+
+                # Extract models from all agents
+                for agent in agents.values():
+                    agent_model = agent.get('llm', {}).get('model')
+                    if agent_model:
+                        models.add(agent_model)
+
+                self.available_models = list(models)
+                return self.available_models
+
+class ActionProbabilityEngine:
+    """Dynamic action probability calculation based on agent traits"""
+
+    def __init__(self, config_path: Path = None):
+        self.base_probabilities = self._load_base_probabilities(config_path)
+        self.personality_modifiers = self._load_personality_modifiers(config_path)
+        self.context_modifiers = self._load_context_modifiers(config_path)
+
+    def _load_base_probabilities(self, config_path: Path) -> Dict[str, float]:
+        """Load base action probabilities from config"""
+        default_probs = {
+            "tweet": 0.6,
+            "like": 0.2,
+            "retweet": 0.15,
+            "reply": 0.05
+        }
+
+        if config_path and (config_path / "action_probabilities.yaml").exists():
+            with open(config_path / "action_probabilities.yaml", 'r') as f:
+                return yaml.safe_load(f) or default_probs
+
+        return default_probs
+
+    def _load_personality_modifiers(self, config_path: Path) -> Dict[str, Dict[str, float]]:
+        """Load personality-based probability modifiers"""
+        default_modifiers = {
+            "analytical": {"tweet": 1.3, "like": 0.5, "retweet": 0.3, "reply": 0.5},
+            "sarcastic": {"tweet": 1.2, "like": 0.5, "retweet": 0.7, "reply": 1.5},
+            "optimistic": {"tweet": 0.8, "like": 1.5, "retweet": 1.2, "reply": 0.8},
+            "playful": {"tweet": 1.3, "like": 0.8, "retweet": 0.5, "reply": 1.2},
+            "contemplative": {"tweet": 1.5, "like": 0.3, "retweet": 0.2, "reply": 0.4},
+            "neutral": {"tweet": 1.0, "like": 1.0, "retweet": 1.0, "reply": 1.0}
+        }
+
+        if config_path and (config_path / "personality_modifiers.yaml").exists():
+            with open(config_path / "personality_modifiers.yaml", 'r') as f:
+                return yaml.safe_load(f) or default_modifiers
+
+        return default_modifiers
+
+    def _load_context_modifiers(self, config_path: Path) -> Dict[str, Dict[str, float]]:
+        """Load context-based probability modifiers"""
+        default_modifiers = {
+            "trending_topic": {"tweet": 1.2, "retweet": 1.5},
+            "high_activity": {"like": 1.3, "reply": 1.2},
+            "low_activity": {"tweet": 1.4, "like": 0.8},
+            "positive_sentiment": {"like": 1.2, "retweet": 1.1},
+            "negative_sentiment": {"reply": 1.3, "tweet": 0.9}
+        }
+
+        if config_path and (config_path / "context_modifiers.yaml").exists():
+            with open(config_path / "context_modifiers.yaml", 'r') as f:
+                return yaml.safe_load(f) or default_modifiers
+
+        return default_modifiers
+
+    def calculate_probabilities(self, agent: Dict, context: Dict = None) -> Dict[str, float]:
+        """Calculate dynamic action probabilities for an agent"""
+        probs = self.base_probabilities.copy()
+
+        # Apply personality modifiers
+        personality = agent.get('personality', {})
+        temperament = personality.get('temperament', 'neutral')
+
+        if temperament in self.personality_modifiers:
+            modifiers = self.personality_modifiers[temperament]
+            for action, modifier in modifiers.items():
+                if action in probs:
+                    probs[action] *= modifier
+
+        # Apply context modifiers if available
+        if context:
+            for context_type, active in context.items():
+                if active and context_type in self.context_modifiers:
+                    modifiers = self.context_modifiers[context_type]
+                    for action, modifier in modifiers.items():
+                        if action in probs:
+                            probs[action] *= modifier
+
+        # Normalize probabilities
+        total = sum(probs.values())
+        if total > 0:
+            probs = {k: v/total for k, v in probs.items()}
+
+        return probs
+
+class DynamicPromptEngine:
+    """Dynamic prompt generation system"""
+
+    def __init__(self, config_path: Path = None):
+        self.templates = self._load_prompt_templates(config_path)
+        self.personality_traits = self._load_personality_traits(config_path)
+        self.context_analyzers = self._load_context_analyzers(config_path)
+
+    def _load_prompt_templates(self, config_path: Path) -> Dict[str, str]:
+        """Load dynamic prompt templates"""
+        default_templates = {
+            "base": """You are {agent_id}, an AI agent with the following dynamic characteristics:
+
+{personality_description}
+
+{context_section}
+
+{instruction_section}
+
+{constraints_section}
+
+Your response:""",
+
+            "personality_trait": "- {trait_name}: {trait_value} ({trait_description})",
+            "context_trending": "Current trending topics: {topics}",
+            "context_activity": "Community activity level: {level}",
+            "context_sentiment": "Community sentiment: {sentiment}",
+            "constraint_length": "Keep response under {max_chars} characters",
+            "context_time": "Current time context: {time_info}"
+        }
+
+        if config_path and (config_path / "prompt_templates.yaml").exists():
+            with open(config_path / "prompt_templates.yaml", 'r') as f:
+                loaded = yaml.safe_load(f) or {}
+                default_templates.update(loaded)
+
+        return default_templates
+
+    def _load_personality_traits(self, config_path: Path) -> Dict[str, Dict]:
+        """Load personality trait descriptions and behaviors"""
+        default_traits = {
+            "temperament": {
+                "analytical": "You approach topics with logical reasoning and data-driven insights",
+                "sarcastic": "You often use wit and irony to make points",
+                "optimistic": "You tend to see the positive side of situations",
+                "playful": "You enjoy humor and lighthearted interactions",
+                "contemplative": "You prefer deep, thoughtful discussions",
+                "neutral": "You maintain a balanced perspective on topics"
+            },
+            "tone": {
+                "formal": "You communicate in a professional, structured manner",
+                "casual": "You use relaxed, conversational language",
+                "energetic": "Your communication is vibrant and enthusiastic",
+                "calm": "You maintain a peaceful, measured tone",
+                "neutral": "You use a balanced, moderate tone"
+            },
+            "emotionality": {
+                "high": "You express emotions freely and passionately",
+                "medium": "You show appropriate emotional responses",
+                "low": "You maintain emotional restraint and composure"
+            },
+            "decision_bias": {
+                "optimistic": "You tend to see the best possible outcomes",
+                "pessimistic": "You consider potential risks and downsides",
+                "balanced": "You weigh both positive and negative aspects"
+            }
+        }
+
+        if config_path and (config_path / "personality_traits.yaml").exists():
+            with open(config_path / "personality_traits.yaml", 'r') as f:
+                loaded = yaml.safe_load(f) or {}
+                default_traits.update(loaded)
+
+        return default_traits
+
+    def _load_context_analyzers(self, config_path: Path) -> Dict[str, Any]:
+        """Load context analysis configuration"""
+        default_analyzers = {
+            "sentiment_keywords": {
+                "positive": ["great", "awesome", "love", "amazing", "wonderful", "excellent"],
+                "negative": ["terrible", "awful", "hate", "horrible", "disappointing", "failed"]
+            },
+            "activity_thresholds": {
+                "high": 10,
+                "medium": 5,
+                "low": 2
+            }
+        }
+
+        if config_path and (config_path / "context_analyzers.yaml").exists():
+            with open(config_path / "context_analyzers.yaml", 'r') as f:
+                loaded = yaml.safe_load(f) or {}
+                default_analyzers.update(loaded)
+
+        return default_analyzers
+
+    def build_dynamic_prompt(self, agent: Dict, action_type: str, context: Dict = None) -> str:
+        """Build completely dynamic prompt based on agent and context"""
+        agent_id = agent.get('id', 'Agent')
+        personality = agent.get('personality', {})
+
+        # Build personality description
+        personality_parts = []
+        for trait_category, trait_value in personality.items():
+            if trait_category in self.personality_traits:
+                trait_info = self.personality_traits[trait_category].get(trait_value)
+                if trait_info:
+                    personality_parts.append(
+                        self.templates["personality_trait"].format(
+                            trait_name=trait_category.replace('_', ' ').title(),
+                            trait_value=trait_value,
+                            trait_description=trait_info
+                        )
+                    )
+
+        personality_description = "\n".join(personality_parts) if personality_parts else "Standard AI agent personality"
+
+        # Build context section
+        context_parts = []
+        if context:
+            if context.get('trending_topics'):
+                context_parts.append(
+                    self.templates["context_trending"].format(
+                        topics=", ".join(context['trending_topics'][:5])
+                    )
+                )
+            if context.get('activity_level'):
+                context_parts.append(
+                    self.templates["context_activity"].format(
+                        level=context['activity_level']
+                    )
+                )
+            if context.get('sentiment'):
+                context_parts.append(
+                    self.templates["context_sentiment"].format(
+                        sentiment=context['sentiment']
+                    )
+                )
+            if context.get('time_context'):
+                context_parts.append(
+                    self.templates["context_time"].format(
+                        time_info=context['time_context']
+                    )
+                )
+
+        context_section = "\n".join(context_parts) if context_parts else ""
+
+        # Build instruction section based on action type
+        instruction_map = {
+            "tweet": "Generate an original tweet that reflects your personality and current context",
+            "reply": "Generate a thoughtful reply to the conversation",
+            "retweet": "Decide whether to retweet and optionally add commentary",
+            "like": "Consider liking content that resonates with your personality"
+        }
+        instruction_section = instruction_map.get(action_type, "Generate appropriate content")
+
+        # Build constraints section
+        constraints = []
+        if action_type == "tweet":
+            max_chars = agent.get('constraints', {}).get('max_tweet_length', 280)
+            constraints.append(
+                self.templates["constraint_length"].format(max_chars=max_chars)
+            )
+        constraints_section = "\n".join(constraints)
+
+        # Assemble final prompt
+        return self.templates["base"].format(
+            agent_id=agent_id,
+            personality_description=personality_description,
+            context_section=context_section,
+            instruction_section=instruction_section,
+            constraints_section=constraints_section
+        )
 
 class TrenchesAgent:
-    def __init__(self, backend_url: str = "http://localhost:8080", llm_config: Dict = None):
-        self.backend_url = backend_url
-        self.llm_config = llm_config or {}
+    def __init__(self, config_path: Path = None):
+        # Set up configuration path
+        if config_path is None:
+            config_path = Path(os.getenv('CONFIG_DIR', 'config'))
+        self.config_path = config_path
+        self.config_path.mkdir(exist_ok=True)
 
-    def load_agent_config(self, path: Path) -> Dict:
-        """Load agent configuration from YAML file"""
+        # Load all dynamic configurations
+        self.sim_config = SimulationConfig.from_file(config_path / "simulation.yaml")
+        self.llm_config = LLMConfig.from_env_and_file(config_path / "llm.yaml")
+        self.action_engine = ActionProbabilityEngine(config_path)
+        self.prompt_engine = DynamicPromptEngine(config_path)
+
+        # Runtime state
+        self.session = None
+        self.agents_cache = {}
+        self.context_cache = {}
+
+        # Setup logging with dynamic level
+        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+        logging.basicConfig(
+            level=getattr(logging, log_level, logging.INFO),
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+
+    async def run_dynamic_simulation(self):
+        """Run completely dynamic simulation"""
+        agents = self.load_all_agents()
+        if not agents:
+            raise ValueError("No agents loaded for simulation")
+
+        # Discover models dynamically from agent configurations
+        self.llm_config.discover_models_from_agents(agents)
+        self.logger.info(f"🤖 Discovered models: {', '.join(self.llm_config.available_models)}")
+
+        self.logger.info(f"🚀 Starting dynamic simulation with {len(agents)} agents")
+
+        for round_num in range(self.sim_config.rounds):
+            self.logger.info(f"\n🔄 Round {round_num + 1}/{self.sim_config.rounds}")
+
+            # Analyze current context dynamically
+            context = await self.analyze_dynamic_context()
+            self.logger.info(f"📊 Context: {len(context)} factors analyzed")
+
+            # Select active agents dynamically
+            active_agents = self._select_dynamic_agents(agents, context)
+            self.logger.info(f"👥 {len(active_agents)} agents selected for this round")
+
+            # Run agents concurrently
+            tasks = [
+                self.simulate_agent_dynamically(agent, context)
+                for agent in active_agents
+            ]
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Dynamic delay between rounds
+            if round_num < self.sim_config.rounds - 1:
+                delay = random.randint(*self.sim_config.round_delay_range)
+                self.logger.info(f"⏳ Waiting {delay}s before next round...")
+                await asyncio.sleep(delay)
+
+        self.logger.info("✅ Dynamic simulation complete!")
+
+    async def __aenter__(self):
+        connector = aiohttp.TCPConnector(
+            limit=self.sim_config.max_concurrent_agents,
+            ttl_dns_cache=300,
+            use_dns_cache=True
+        )
+        timeout = aiohttp.ClientTimeout(total=self.sim_config.backend_timeout)
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            await self.session.close()
+
+    def load_all_agents(self, agent_dir: Path = None) -> Dict[str, Dict]:
+        """Dynamically load all agent configurations"""
+        if agent_dir is None:
+            agent_dir = Path(os.getenv('AGENT_SPEC_DIR', 'agent_spec'))
+
+        if not agent_dir.exists():
+            self.logger.warning(f"Agent directory {agent_dir} not found")
+            return {}
+
+        agents = {}
+        for config_file in agent_dir.glob("*.yaml"):
+            try:
+                agent = self._load_and_validate_agent(config_file)
+                agents[agent['id']] = agent
+                self.logger.debug(f"Loaded agent: {agent['id']}")
+            except Exception as e:
+                self.logger.error(f"Failed to load {config_file}: {e}")
+
+        self.logger.info(f"Loaded {len(agents)} agents from {agent_dir}")
+        return agents
+
+    def _load_and_validate_agent(self, path: Path) -> Dict:
+        """Load and validate agent with dynamic schema"""
+        with open(path, 'r', encoding='utf-8') as f:
+            agent = yaml.safe_load(f)
+
+        if not agent:
+            raise ValueError(f"Empty configuration file: {path}")
+
+        # Dynamic validation based on schema file
+        schema_path = self.config_path / "agent_schema.yaml"
+        if schema_path.exists():
+            with open(schema_path, 'r') as f:
+                schema = yaml.safe_load(f)
+                self._validate_against_schema(agent, schema, path)
+        else:
+            # Minimal validation
+            if 'id' not in agent:
+                raise ValueError(f"Agent missing required 'id' field in {path}")
+
+        # Apply dynamic defaults
+        self._apply_dynamic_defaults(agent)
+        return agent
+
+    def _validate_against_schema(self, agent: Dict, schema: Dict, path: Path):
+        """Validate agent against dynamic schema"""
+        required_fields = schema.get('required', ['id'])
+        for field in required_fields:
+            if field not in agent:
+                raise ValueError(f"Agent missing required field '{field}' in {path}")
+
+        # Validate field types if specified
+        field_types = schema.get('field_types', {})
+        for field, expected_type in field_types.items():
+            if field in agent:
+                actual_type = type(agent[field]).__name__
+                if actual_type != expected_type:
+                    raise ValueError(f"Field '{field}' should be {expected_type}, got {actual_type} in {path}")
+
+    def _apply_dynamic_defaults(self, agent: Dict):
+        """Apply dynamic defaults to agent configuration"""
+        defaults_path = self.config_path / "agent_defaults.yaml"
+        if defaults_path.exists():
+            with open(defaults_path, 'r') as f:
+                defaults = yaml.safe_load(f) or {}
+                self._deep_merge_defaults(agent, defaults)
+
+    def _deep_merge_defaults(self, agent: Dict, defaults: Dict):
+        """Deep merge defaults into agent config"""
+        for key, value in defaults.items():
+            if key not in agent:
+                agent[key] = value
+            elif isinstance(value, dict) and isinstance(agent[key], dict):
+                self._deep_merge_defaults(agent[key], value)
+
+    async def check_backend_health_async(self) -> bool:
+        """Check if Go backend is running asynchronously"""
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-                if not config:
-                    raise ValueError(f"Empty configuration file: {path}")
-                return config
-        except yaml.YAMLError as e:
-            logger.error(f"Invalid YAML in {path}: {e}")
-            raise
-        except FileNotFoundError:
-            logger.error(f"Configuration file not found: {path}")
-            raise
+            health_endpoint = f"{self.sim_config.backend_url}/ping"
+            timeout = aiohttp.ClientTimeout(total=self.sim_config.health_check_timeout)
 
-    def post_tweet(self, agent_id: str, content: str, thread_id: Optional[int] = None) -> bool:
-        """Post a tweet via the Go backend"""
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(health_endpoint) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return (data == "pong" or
+                               (isinstance(data, dict) and data.get("message") == "pong"))
+            return False
+        except Exception as e:
+            self.logger.error(f"Backend health check failed: {e}")
+            return False
+
+    async def get_recent_tweets_async(self, limit: int = None) -> List[Dict]:
+        """Fetch recent tweets for context asynchronously"""
+        if limit is None:
+            limit = self.sim_config.context_tweets_limit
+
+        try:
+            tweets_endpoint = f"{self.sim_config.backend_url}/tweets"
+            async with self.session.get(tweets_endpoint) as response:
+                response.raise_for_status()
+                tweets = await response.json()
+                return tweets[:limit] if tweets else []
+        except Exception as e:
+            self.logger.error(f"Failed to fetch tweets: {e}")
+            return []
+
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    async def post_tweet_async(self, agent_id: str, content: str, thread_id: Optional[int] = None) -> bool:
+        """Post a tweet asynchronously with retry logic"""
         payload = {
             "agent_id": agent_id,
-            "content": content
+            "content": content,
+            "timestamp": time.time()
         }
         if thread_id:
             payload["thread_id"] = thread_id
 
         try:
-            response = requests.post(f"{self.backend_url}/tweets", json=payload, timeout=5)
-            response.raise_for_status()
-            logger.info(f"✅ Tweet posted by {agent_id}: {content[:50]}...")
-            return True
-        except requests.RequestException as e:
-            logger.error(f"❌ Failed to post tweet for {agent_id}: {e}")
+            tweets_endpoint = f"{self.sim_config.backend_url}/tweets"
+            async with self.session.post(
+                tweets_endpoint,
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            ) as response:
+                response.raise_for_status()
+                self.logger.info(f"✅ Tweet posted by {agent_id}: {content[:50]}...")
+                return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to post tweet for {agent_id}: {e}")
             return False
 
-    def get_recent_tweets(self, limit: int = 10) -> List[Dict]:
-        """Fetch recent tweets for context"""
-        try:
-            response = requests.get(f"{self.backend_url}/tweets", timeout=5)
-            response.raise_for_status()
-            tweets = response.json()
-            return tweets[:limit] if tweets else []
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch tweets: {e}")
-            return []
+    async def analyze_dynamic_context(self) -> Dict[str, Any]:
+        """Analyze current context dynamically"""
+        context = {}
 
-    def _build_personality_prompt(self, agent: Dict, recent_tweets: List[Dict] = None) -> str:
-        """Build personality-aware prompt for LLM"""
-        personality = agent.get('personality', {})
-        agent_id = agent.get('id', 'unknown')
-
-        # Extract all personality traits from the agent config
-        temperament = personality.get('temperament', 'neutral')
-        tone = personality.get('tone', 'neutral')
-        emotionality = personality.get('emotionality', 'medium')
-        decision_bias = personality.get('decision_bias', 'balanced')
-
-        prompt = f"""You are {agent_id}, with these personality traits:
-    - Temperament: {temperament}
-    - Tone: {tone}
-    - Emotionality: {emotionality}
-    - Decision Bias: {decision_bias}
-
-    Generate a tweet (max 280 characters) that reflects your personality.
-    You can tweet about any topic that interests you - technology, life observations,
-    current events, personal thoughts, humor, philosophy, or anything else.
-    Be authentic to your character traits and speak in your unique voice.
-    Use appropriate emojis and hashtags when relevant.
-    """
+        # Get recent tweets for analysis
+        recent_tweets = await self.get_recent_tweets_async(
+            limit=self.sim_config.context_tweets_limit * 2
+        )
 
         if recent_tweets:
-            tweet_context = "\n".join([f"- {t.get('content', '')[:50]}" for t in recent_tweets[:3]])
-            prompt += f"\n\nRecent community tweets for context:\n{tweet_context}\n"
+            # Analyze trending topics
+            context['trending_topics'] = self._extract_trending_topics(recent_tweets)
 
-        prompt += "\nYour tweet:"
-        return prompt
+            # Analyze activity level
+            context['activity_level'] = self._calculate_activity_level(recent_tweets)
+
+            # Analyze sentiment
+            context['sentiment'] = self._analyze_sentiment(recent_tweets)
+
+        # Time-based context
+        context['time_context'] = self._get_time_context()
+
+        return context
+
+    def _extract_trending_topics(self, tweets: List[Dict]) -> List[str]:
+        """Extract trending topics from recent tweets"""
+        word_freq = {}
+        stop_words_config = self.prompt_engine.context_analyzers.get('stop_words', {
+            'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'
+        })
+
+        for tweet in tweets:
+            content = tweet.get('content', '').lower()
+            words = [w.strip('.,!?#@') for w in content.split()
+                    if len(w) > 3 and w not in stop_words_config]
+
+            for word in words:
+                word_freq[word] = word_freq.get(word, 0) + 1
+
+        # Return top trending words
+        min_frequency = self.prompt_engine.context_analyzers.get('min_trend_frequency', 1)
+        max_trends = self.prompt_engine.context_analyzers.get('max_trending_topics', 10)
+
+        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        return [word for word, freq in sorted_words[:max_trends] if freq > min_frequency]
+
+    def _calculate_activity_level(self, tweets: List[Dict]) -> str:
+        """Calculate activity level based on recent tweets"""
+        thresholds = self.prompt_engine.context_analyzers.get('activity_thresholds', {
+            'high': 10, 'medium': 5, 'low': 2
+        })
+
+        tweet_count = len(tweets)
+
+        if tweet_count >= thresholds['high']:
+            return 'high'
+        elif tweet_count >= thresholds['medium']:
+            return 'medium'
+        elif tweet_count >= thresholds['low']:
+            return 'low'
+        else:
+            return 'very_low'
+
+    def _analyze_sentiment(self, tweets: List[Dict]) -> str:
+        """Analyze overall sentiment of recent tweets"""
+        sentiment_keywords = self.prompt_engine.context_analyzers.get('sentiment_keywords', {
+            'positive': ['great', 'awesome', 'love', 'amazing'],
+            'negative': ['terrible', 'awful', 'hate', 'horrible']
+        })
+
+        positive_count = 0
+        negative_count = 0
+
+        for tweet in tweets:
+            content = tweet.get('content', '').lower()
+
+            for word in sentiment_keywords['positive']:
+                if word in content:
+                    positive_count += 1
+
+            for word in sentiment_keywords['negative']:
+                if word in content:
+                    negative_count += 1
+
+        if positive_count > negative_count:
+            return 'positive'
+        elif negative_count > positive_count:
+            return 'negative'
+        else:
+            return 'neutral'
+
+    def _get_time_context(self) -> str:
+        """Get time-based context"""
+        current_hour = time.localtime().tm_hour
+
+        time_periods = {
+            'early_morning': range(5, 9),
+            'morning': range(9, 12),
+            'afternoon': range(12, 17),
+            'evening': range(17, 21),
+            'night': range(21, 24),
+            'late_night': list(range(0, 5))
+        }
+
+        for period, hours in time_periods.items():
+            if current_hour in hours:
+                return period
+
+        return 'unknown'
 
     def _generate_with_openrouter(self, agent: Dict, prompt: str) -> str:
         """Generate using OpenRouter API via OpenAI SDK"""
         # Get configuration
         agent_llm = agent.get('llm', {})
-        model = agent_llm.get('model', self.llm_config.get('model', 'openai/gpt-3.5-turbo'))
-        temperature = agent_llm.get('temperature', self.llm_config.get('temperature', 0.7))
+        model = agent_llm.get('model', self.llm_config.default_model)
+        temperature = agent_llm.get('temperature', self.llm_config.default_temperature)
+        max_tokens = agent_llm.get('max_tokens', self.llm_config.default_max_tokens)
 
-        # Get API key and ensure it's properly formatted
-        api_key = self.llm_config.get('api_key') or os.getenv('OPENROUTER_API_KEY')
+        # Get API key
+        api_key = self.llm_config.api_key or os.getenv('OPENROUTER_API_KEY')
         if not api_key:
             raise ValueError("OpenRouter API key not found")
 
-        # Make sure the API key is properly formatted (no whitespace)
         api_key = api_key.strip()
 
-        # Log connection attempt (limited key visibility for security)
-        if len(api_key) > 8:
-            visible_part = api_key[:4] + '...' + api_key[-4:]
-            logger.info(f"Connecting to OpenRouter with key starting with: {visible_part}")
-
         try:
-            # Initialize OpenAI client with proper headers
+            # Initialize OpenAI client
             client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
+                base_url=self.llm_config.base_url,
                 api_key=api_key,
-                default_headers={
-                    "HTTP-Referer": "https://trenches-social.com",
-                    "X-Title": "Trenches Social Sim"
-                }
+                default_headers=self.llm_config.default_headers
             )
 
             # Make the completion request
@@ -131,181 +718,190 @@ class TrenchesAgent:
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
-                max_tokens=100
+                max_tokens=max_tokens
             )
 
             # Extract and format content
             content = completion.choices[0].message.content.strip()
-            return content[:280] if len(content) > 280 else content
+            max_length = agent.get('constraints', {}).get('max_tweet_length', 280)
+            return content[:max_length] if len(content) > max_length else content
 
         except Exception as e:
             error_message = str(e)
-            logger.error(f"OpenRouter API error: {error_message}")
+            self.logger.error(f"OpenRouter API error: {error_message}")
 
-            # More helpful error for authentication issues
             if "401" in error_message:
-                raise ValueError(f"OpenRouter authentication failed. Please check your API key format and permissions. Error: {error_message}")
+                raise ValueError(f"OpenRouter authentication failed: {error_message}")
             raise
 
-    def generate_content(self, agent: Dict, recent_tweets: List[Dict] = None) -> str:
-        """Generate content using LLM only - no templates"""
+    async def generate_content_async(self, agent: Dict, action_type: str, context: Dict = None) -> str:
+        """Generate content asynchronously using dynamic prompts"""
         agent_id = agent.get('id', 'unknown')
 
         try:
-            prompt = self._build_personality_prompt(agent, recent_tweets)
-            content = self._generate_with_openrouter(agent, prompt)
+            prompt = self.prompt_engine.build_dynamic_prompt(agent, action_type, context)
+
+            # Run in executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            content = await loop.run_in_executor(
+                None,
+                self._generate_with_openrouter,
+                agent,
+                prompt
+            )
             return content
         except Exception as e:
-            logger.error(f"❌ [{agent_id}] Failed to generate content: {e}")
+            self.logger.error(f"❌ [{agent_id}] Failed to generate content: {e}")
             raise Exception(f"Content generation failed for {agent_id}: {e}")
 
-    def simulate_action(self, agent: Dict, recent_tweets: List[Dict] = None):
-        """Simulate various agent actions"""
+    def _select_dynamic_agents(self, agents: Dict, context: Dict) -> List[Dict]:
+        """Select which agents are active based on dynamic criteria"""
+        active = []
+        current_hour = time.localtime().tm_hour
+
+        for agent in agents.values():
+            activity = agent.get('activity', {})
+
+            # Check time-based activity
+            active_hours = activity.get('active_hours', list(range(24)))
+            if current_hour not in active_hours:
+                continue
+
+            # Check activity probability
+            base_prob = activity.get('activity_probability', 0.7)
+
+            # Modify probability based on context
+            if context.get('activity_level') == 'high':
+                base_prob *= activity.get('high_activity_modifier', 1.2)
+            elif context.get('activity_level') == 'low':
+                base_prob *= activity.get('low_activity_modifier', 0.8)
+
+            if random.random() < base_prob:
+                active.append(agent)
+
+        # Limit concurrent agents
+        max_agents = activity.get('max_concurrent_agents', self.sim_config.max_concurrent_agents)
+        if len(active) > max_agents:
+            active = random.sample(active, max_agents)
+
+        return active
+
+    async def _execute_dynamic_action(self, agent: Dict, action: str, context: Dict):
+        """Execute a dynamic action for an agent"""
         agent_id = agent.get('id')
-        if not agent_id:
-            logger.error("Agent missing required 'id' field")
-            return
 
-        # Get activity configuration
-        activity_config = agent.get('activity', {})
-        actions_range = activity_config.get('actions_per_awake', [1, 2])
+        if action == 'tweet':
+            try:
+                content = await self.generate_content_async(agent, action, context)
+                success = await self.post_tweet_async(agent_id, content)
+                if success:
+                    self.logger.info(f"🐦 [{agent_id}] tweeted")
+            except Exception as e:
+                self.logger.error(f"❌ [{agent_id}] Failed to tweet: {e}")
+        else:
+            # For MVP, just log other actions
+            self.logger.info(f"📱 [{agent_id}] {action}d something...")
 
-        # Validate actions_range
-        if len(actions_range) != 2 or actions_range[0] > actions_range[1]:
-            logger.warning(f"Invalid actions_per_awake range for {agent_id}, using default [1, 2]")
-            actions_range = [1, 2]
+    async def simulate_agent_dynamically(self, agent: Dict, context: Dict):
+        """Simulate agent with completely dynamic behavior"""
+        agent_id = agent.get('id')
 
-        # Determine number of actions for this agent
-        num_actions = random.randint(actions_range[0], actions_range[1])
+        # Calculate dynamic action probabilities
+        probabilities = self.action_engine.calculate_probabilities(agent, context)
+
+        # Determine number of actions dynamically
+        activity = agent.get('activity', {})
+        action_range = activity.get('actions_per_awake', [1, 2])
+
+        if len(action_range) != 2 or action_range[0] > action_range[1]:
+            action_range = [1, 2]
+
+        num_actions = random.randint(action_range[0], action_range[1])
 
         for _ in range(num_actions):
-            # Define action probabilities based on personality
-            personality_info = agent.get('personality', {})
-            temperament = personality_info.get('temperament', 'neutral')
+            # Choose action based on dynamic probabilities
+            action = random.choices(
+                list(probabilities.keys()),
+                weights=list(probabilities.values())
+            )[0]
 
-            # Adjust probabilities based on temperament
-            if temperament == 'analytical':
-                actions = {'tweet': 0.8, 'like': 0.1, 'retweet': 0.05, 'reply': 0.05}
-            elif temperament == 'sarcastic':
-                actions = {'tweet': 0.7, 'like': 0.1, 'retweet': 0.1, 'reply': 0.1}
-            elif temperament == 'optimistic':
-                actions = {'tweet': 0.5, 'like': 0.3, 'retweet': 0.15, 'reply': 0.05}
-            elif temperament == 'playful':
-                actions = {'tweet': 0.8, 'like': 0.1, 'retweet': 0.05, 'reply': 0.05}
-            elif temperament == 'contemplative':
-                actions = {'tweet': 0.9, 'like': 0.05, 'retweet': 0.03, 'reply': 0.02}
-            else:
-                actions = {'tweet': 0.6, 'like': 0.2, 'retweet': 0.15, 'reply': 0.05}
+            await self._execute_dynamic_action(agent, action, context)
 
-            # Choose action based on probabilities
-            action = random.choices(list(actions.keys()), weights=list(actions.values()))[0]
-
-            if action == 'tweet':
-                try:
-                    content = self.generate_content(agent, recent_tweets)
-                    success = self.post_tweet(agent_id, content)
-                    if success:
-                        logger.info(f"🐦 [{agent_id}] tweeted")
-                except Exception as e:
-                    logger.error(f"❌ [{agent_id}] Failed to tweet: {e}")
-            else:
-                # For MVP, just log other actions
-                logger.info(f"📱 [{agent_id}] {action}d something...")
-
-            # Small delay between actions from same agent
+            # Dynamic delay between actions
             if num_actions > 1:
-                time.sleep(random.uniform(0.5, 1.5))
+                delay_range = activity.get('action_delay_range', self.sim_config.agent_delay_range)
+                delay = random.uniform(delay_range[0], delay_range[1])
+                await asyncio.sleep(delay)
 
-    def check_backend_health(self) -> bool:
-        """Check if Go backend is running"""
-        try:
-            response = requests.get(f"{self.backend_url}/ping", timeout=3)
-            if response.status_code == 200:
-                response_data = response.json()
-                return (response_data == "pong" or
-                       (isinstance(response_data, dict) and response_data.get("message") == "pong"))
-            return False
-        except requests.RequestException:
-            return False
+    async def run_dynamic_simulation(self):
+        """Run completely dynamic simulation"""
+        agents = self.load_all_agents()
+        if not agents:
+            raise ValueError("No agents loaded for simulation")
 
-def main():
+        self.logger.info(f"🚀 Starting dynamic simulation with {len(agents)} agents")
+
+        for round_num in range(self.sim_config.rounds):
+            self.logger.info(f"\n🔄 Round {round_num + 1}/{self.sim_config.rounds}")
+
+            # Analyze current context dynamically
+            context = await self.analyze_dynamic_context()
+            self.logger.info(f"📊 Context: {len(context)} factors analyzed")
+
+            # Select active agents dynamically
+            active_agents = self._select_dynamic_agents(agents, context)
+            self.logger.info(f"👥 {len(active_agents)} agents selected for this round")
+
+            # Run agents concurrently
+            tasks = [
+                self.simulate_agent_dynamically(agent, context)
+                for agent in active_agents
+            ]
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Dynamic delay between rounds
+            if round_num < self.sim_config.rounds - 1:
+                delay = random.randint(*self.sim_config.round_delay_range)
+                self.logger.info(f"⏳ Waiting {delay}s before next round...")
+                await asyncio.sleep(delay)
+
+        self.logger.info("✅ Dynamic simulation complete!")
+
+async def main():
+    """Completely dynamic main function"""
+    # Load configuration dynamically
+    config_dir = Path(os.getenv('CONFIG_DIR', 'config'))
+
     # Debug API key loading
     api_key = os.getenv('OPENROUTER_API_KEY')
     if not api_key:
-        logger.error("❌ OpenRouter API key not found in environment")
+        logging.error("❌ OpenRouter API key not found in environment")
         return
     else:
         # Only show first few chars for security
         masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
-        logger.info(f"✅ API key found: {masked_key}")
+        logging.info(f"✅ API key found: {masked_key}")
 
-        # Verify API key format
-        if not api_key.startswith("sk-"):
-            logger.warning("⚠️ API key doesn't start with 'sk-', may not be correctly formatted")
-
-    # LLM configuration for OpenRouter - global defaults
-    llm_config = {
-        'api_key': api_key,
-        'model': 'openai/gpt-3.5-turbo',  # Using a widely available model
-        'temperature': 0.7  # Default fallback temperature
-    }
-
-    agent_runner = TrenchesAgent(llm_config=llm_config)
-
-    # Check backend connection
-    if not agent_runner.check_backend_health():
-        logger.error("❌ Cannot connect to Go backend. Make sure it's running on :8080")
-        logger.info("💡 Start the backend with: cd backend && go run main.go")
-        return
-
-    logger.info("✅ Connected to Trenches backend")
-    logger.info("🤖 LLM-only mode enabled - using agent-specific models and configs")
-
-    # Load all agent configs
-    config_path = Path("agent_spec")
-    if not config_path.exists():
-        logger.error(f"Agent spec directory '{config_path}' not found")
-        logger.info("💡 Create agent_spec/ directory with YAML files")
-        return
-
-    config_files = list(config_path.glob("*.yaml"))
-    if not config_files:
-        logger.warning(f"No YAML files found in '{config_path}'")
-        return
-
-    logger.info(f"📁 Found {len(config_files)} agent configurations")
-
-    # Simulation loop
     try:
-        for round_num in range(3):  # 3 rounds of activity
-            logger.info(f"\n🔄 === Round {round_num + 1}/3 ===")
+        async with TrenchesAgent(config_dir) as agent:
+            # Dynamic health check
+            if not await agent.check_backend_health_async():
+                backend_url = agent.sim_config.backend_url
+                agent.logger.error(f"❌ Backend unavailable at {backend_url}")
+                agent.logger.info("💡 Start the backend with: cd backend && go run main.go")
+                return
 
-            # Get recent tweets for context
-            recent_tweets = agent_runner.get_recent_tweets(limit=5)
-            if recent_tweets:
-                logger.info(f"📰 Context: {len(recent_tweets)} recent tweets available")
+            agent.logger.info("✅ Connected to Trenches backend")
+            agent.logger.info("🤖 Dynamic LLM mode enabled")
 
-            # Simulate each agent
-            for config_file in config_files:
-                try:
-                    agent = agent_runner.load_agent_config(config_file)
-                    agent_runner.simulate_action(agent, recent_tweets)
-
-                    # Random delay between agents (1-3 seconds)
-                    time.sleep(random.uniform(1, 3))
-
-                except Exception as e:
-                    logger.error(f"Error processing {config_file}: {e}")
-
-            # Longer delay between rounds
-            if round_num < 2:  # Don't sleep after last round
-                logger.info("⏳ Waiting before next round...")
-                time.sleep(random.randint(8, 15))
-
-        logger.info("\n✅ Simulation complete!")
+            # Run dynamic simulation
+            await agent.run_dynamic_simulation()
 
     except KeyboardInterrupt:
-        logger.info("\n⏹️  Simulation stopped by user")
+        logging.info("⏹️ Simulation interrupted by user")
+    except Exception as e:
+        logging.error(f"💥 Simulation failed: {e}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
