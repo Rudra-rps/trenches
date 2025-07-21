@@ -1,3 +1,4 @@
+version: '3.9'
 services:
   postgres:
     image: postgres:16
@@ -6,7 +7,7 @@ services:
       POSTGRES_USER: trenches
       POSTGRES_PASSWORD: secret
     ports:
-      - "5433:5432"   # Changed host port to 5433
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -18,19 +19,26 @@ services:
   neo4j:
     image: neo4j:5.14
     environment:
-      NEO4J_AUTH: neo4j/secret
+      NEO4J_AUTH: neo4j/verysecret123
     ports:
       - "7474:7474"
       - "7687:7687"
 
-  ollama:
-    image: ollama/ollama
+  backend:
+    build:
+      context: ./backend
     ports:
-      - "11434:11434"
-    volumes:
-      - ollama:/root/.ollama
+      - "8080:8080"
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: trenches
+      DB_PASSWORD: secret
+      DB_NAME: trenches
+
 
 volumes:
   pgdata:
-  ollama:
 

@@ -80,7 +80,7 @@ func logEvent(event any) {
 
 func main() {
 	var err error
-	db, err = sqlx.Connect("postgres", "host=127.0.0.1 port=5433 user=trenches password=secret dbname=trenches sslmode=disable")
+	db, err = sqlx.Connect("postgres", "host=postgres port=5432 user=trenches password=secret dbname=trenches sslmode=disable")
 	if err != nil {
 		log.Fatalln("DB connection error:", err)
 	}
