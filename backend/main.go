@@ -392,6 +392,32 @@ func main() {
 		c.JSON(http.StatusOK, tweets)
 	})
 
+	// GET /stats — return total likes & retweets grouped by agent
+	r.GET("/stats", func(c *gin.Context) {
+		var stats []struct {
+			AgentID       string `db:"agent_id" json:"agent_id"`
+			TotalLikes    int    `db:"total_likes" json:"total_likes"`
+			TotalRetweets int    `db:"total_retweets" json:"total_retweets"`
+		}
+
+		query := `
+		SELECT 
+			agent_id, 
+			COALESCE(SUM(likes), 0) AS total_likes,
+			COALESCE(SUM(retweets), 0) AS total_retweets
+		FROM tweets
+		GROUP BY agent_id
+	`
+
+		err := db.Select(&stats, query)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, stats)
+	})
+
 	// Start server
 	r.Run(":8080")
 }
