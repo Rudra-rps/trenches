@@ -16,6 +16,41 @@ import backoff
 
 load_dotenv()
 
+class TweetPoster:
+    def __init__(self):
+        self.tweet_count = 0
+        self.start_time = time.time()
+
+    async def post_tweet_async(self, agent_id: str, content: str, thread_id: Optional[int] = None) -> bool:
+        """Post a tweet asynchronously with retry logic"""
+        payload = {
+            "agent_id": agent_id,
+            "content": content,
+            "timestamp": time.time()
+        }
+        if thread_id:
+            payload["thread_id"] = thread_id
+
+        try:
+            tweets_endpoint = f"{self.sim_config.backend_url}/tweets"
+            async with self.session.post(
+                tweets_endpoint,
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            ) as response:
+                response.raise_for_status()
+                self.logger.info(f"✅ Tweet posted by {agent_id}: {content[:50]}...")
+                self.tweet_count += 1
+                elapsed = time.time() - self.start_time
+                if elapsed >= 60:
+                    print(f"Tweets posted in last minute: {self.tweet_count}")
+                    self.tweet_count = 0
+                    self.start_time = time.time()
+                return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to post tweet for {agent_id}: {e}")
+            return False
+
 class ActionType(Enum):
     TWEET = "tweet"
     LIKE = "like"
@@ -53,18 +88,23 @@ class SimulationConfig:
 
 @dataclass
 class LLMConfig:
-    """Dynamic LLM configuration"""
+    """Dynamic LLM configuration for Groq API"""
     api_key: str = ""
-    base_url: str = "https://openrouter.ai/api/v1"
-    default_model: str = "moonshotai/kimi-k2:free"
+    base_url: str = "https://api.groq.com/openai/v1"
+    default_model: str = "llama-3.1-8b-instant"
     default_temperature: float = 0.7
     default_max_tokens: int = 100
     request_timeout: int = 30
     retry_attempts: int = 3
-    available_models: List[str] = field(default_factory=list)
+    available_models: List[str] = field(default_factory=lambda: [
+        "llama-3.1-8b-instant",
+        "llama3-8b-8192",
+        "llama3-70b-8192",
+        "mixtral-8x7b-32768",
+        "gemma-7b-it"
+    ])
     default_headers: Dict[str, str] = field(default_factory=lambda: {
-        "HTTP-Referer": "https://trenches-social.com",
-        "X-Title": "Trenches Social Sim"
+        "Content-Type": "application/json"
     })
 
     @classmethod
@@ -72,8 +112,8 @@ class LLMConfig:
         """Load LLM config from environment and file"""
         config = cls()
 
-        # Load from environment
-        config.api_key = os.getenv('OPENROUTER_API_KEY', '')
+        # Load from environment - changed to GROQ
+        config.api_key = os.getenv('GROQ_API_KEY', '')
         config.base_url = os.getenv('LLM_BASE_URL', config.base_url)
         config.default_model = os.getenv('DEFAULT_LLM_MODEL', config.default_model)
         config.default_temperature = float(os.getenv('DEFAULT_TEMPERATURE', config.default_temperature))
@@ -89,21 +129,21 @@ class LLMConfig:
 
         return config
 
-        def discover_models_from_agents(self, agents: Dict[str, Dict]) -> List[str]:
-                """Dynamically discover available models from agent configurations"""
-                models = set()
+    def discover_models_from_agents(self, agents: Dict[str, Dict]) -> List[str]:
+        """Dynamically discover available models from agent configurations"""
+        models = set(self.available_models)  # Start with Groq models
 
-                # Add default model
-                models.add(self.default_model)
+        # Add default model
+        models.add(self.default_model)
 
-                # Extract models from all agents
-                for agent in agents.values():
-                    agent_model = agent.get('llm', {}).get('model')
-                    if agent_model:
-                        models.add(agent_model)
+        # Extract models from all agents
+        for agent in agents.values():
+            agent_model = agent.get('llm', {}).get('model')
+            if agent_model:
+                models.add(agent_model)
 
-                self.available_models = list(models)
-                return self.available_models
+        self.available_models = list(models)
+        return self.available_models
 
 class ActionProbabilityEngine:
     """Dynamic action probability calculation based on agent traits"""
@@ -391,45 +431,12 @@ class TrenchesAgent:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
-
-    async def run_dynamic_simulation(self):
-        """Run completely dynamic simulation"""
-        agents = self.load_all_agents()
-        if not agents:
-            raise ValueError("No agents loaded for simulation")
-
-        # Discover models dynamically from agent configurations
-        self.llm_config.discover_models_from_agents(agents)
-        self.logger.info(f"🤖 Discovered models: {', '.join(self.llm_config.available_models)}")
-
-        self.logger.info(f"🚀 Starting dynamic simulation with {len(agents)} agents")
-
-        for round_num in range(self.sim_config.rounds):
-            self.logger.info(f"\n🔄 Round {round_num + 1}/{self.sim_config.rounds}")
-
-            # Analyze current context dynamically
-            context = await self.analyze_dynamic_context()
-            self.logger.info(f"📊 Context: {len(context)} factors analyzed")
-
-            # Select active agents dynamically
-            active_agents = self._select_dynamic_agents(agents, context)
-            self.logger.info(f"👥 {len(active_agents)} agents selected for this round")
-
-            # Run agents concurrently
-            tasks = [
-                self.simulate_agent_dynamically(agent, context)
-                for agent in active_agents
-            ]
-
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Dynamic delay between rounds
-            if round_num < self.sim_config.rounds - 1:
-                delay = random.randint(*self.sim_config.round_delay_range)
-                self.logger.info(f"⏳ Waiting {delay}s before next round...")
-                await asyncio.sleep(delay)
-
-        self.logger.info("✅ Dynamic simulation complete!")
+        # Add TweetPoster instance
+        self.tweet_poster = TweetPoster()
+        # Inject dependencies for TweetPoster
+        self.tweet_poster.sim_config = self.sim_config
+        self.tweet_poster.session = None  # Will be set in __aenter__
+        self.tweet_poster.logger = self.logger
 
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(
@@ -442,6 +449,8 @@ class TrenchesAgent:
             connector=connector,
             timeout=timeout
         )
+        # Set session for TweetPoster
+        self.tweet_poster.session = self.session
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -557,28 +566,8 @@ class TrenchesAgent:
 
     @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def post_tweet_async(self, agent_id: str, content: str, thread_id: Optional[int] = None) -> bool:
-        """Post a tweet asynchronously with retry logic"""
-        payload = {
-            "agent_id": agent_id,
-            "content": content,
-            "timestamp": time.time()
-        }
-        if thread_id:
-            payload["thread_id"] = thread_id
-
-        try:
-            tweets_endpoint = f"{self.sim_config.backend_url}/tweets"
-            async with self.session.post(
-                tweets_endpoint,
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                response.raise_for_status()
-                self.logger.info(f"✅ Tweet posted by {agent_id}: {content[:50]}...")
-                return True
-        except Exception as e:
-            self.logger.error(f"❌ Failed to post tweet for {agent_id}: {e}")
-            return False
+        # Use TweetPoster for posting tweets
+        return await self.tweet_poster.post_tweet_async(agent_id, content, thread_id)
 
     async def analyze_dynamic_context(self) -> Dict[str, Any]:
         """Analyze current context dynamically"""
@@ -690,8 +679,8 @@ class TrenchesAgent:
 
         return 'unknown'
 
-    def _generate_with_openrouter(self, agent: Dict, prompt: str) -> str:
-        """Generate using OpenRouter API via OpenAI SDK"""
+    def _generate_with_groq(self, agent: Dict, prompt: str) -> str:
+        """Generate using Groq API via OpenAI SDK"""
         # Get configuration
         agent_llm = agent.get('llm', {})
         model = agent_llm.get('model', self.llm_config.default_model)
@@ -699,18 +688,17 @@ class TrenchesAgent:
         max_tokens = agent_llm.get('max_tokens', self.llm_config.default_max_tokens)
 
         # Get API key
-        api_key = self.llm_config.api_key or os.getenv('OPENROUTER_API_KEY')
+        api_key = self.llm_config.api_key or os.getenv('GROQ_API_KEY')
         if not api_key:
-            raise ValueError("OpenRouter API key not found")
+            raise ValueError("Groq API key not found")
 
         api_key = api_key.strip()
 
         try:
-            # Initialize OpenAI client
+            # Initialize OpenAI client for Groq
             client = OpenAI(
                 base_url=self.llm_config.base_url,
-                api_key=api_key,
-                default_headers=self.llm_config.default_headers
+                api_key=api_key
             )
 
             # Make the completion request
@@ -728,10 +716,10 @@ class TrenchesAgent:
 
         except Exception as e:
             error_message = str(e)
-            self.logger.error(f"OpenRouter API error: {error_message}")
+            self.logger.error(f"Groq API error: {error_message}")
 
             if "401" in error_message:
-                raise ValueError(f"OpenRouter authentication failed: {error_message}")
+                raise ValueError(f"Groq authentication failed: {error_message}")
             raise
 
     async def generate_content_async(self, agent: Dict, action_type: str, context: Dict = None) -> str:
@@ -745,7 +733,7 @@ class TrenchesAgent:
             loop = asyncio.get_event_loop()
             content = await loop.run_in_executor(
                 None,
-                self._generate_with_openrouter,
+                self._generate_with_groq,  # Changed from _generate_with_openrouter
                 agent,
                 prompt
             )
@@ -780,7 +768,7 @@ class TrenchesAgent:
                 active.append(agent)
 
         # Limit concurrent agents
-        max_agents = activity.get('max_concurrent_agents', self.sim_config.max_concurrent_agents)
+        max_agents = self.sim_config.max_concurrent_agents
         if len(active) > max_agents:
             active = random.sample(active, max_agents)
 
@@ -839,7 +827,13 @@ class TrenchesAgent:
         if not agents:
             raise ValueError("No agents loaded for simulation")
 
+        # Discover models dynamically from agent configurations
+        self.llm_config.discover_models_from_agents(agents)
+        self.logger.info(f"🤖 Discovered models: {', '.join(self.llm_config.available_models)}")
+
         self.logger.info(f"🚀 Starting dynamic simulation with {len(agents)} agents")
+
+        sim_start_time = time.time()  # Start timer for the run
 
         for round_num in range(self.sim_config.rounds):
             self.logger.info(f"\n🔄 Round {round_num + 1}/{self.sim_config.rounds}")
@@ -866,22 +860,27 @@ class TrenchesAgent:
                 self.logger.info(f"⏳ Waiting {delay}s before next round...")
                 await asyncio.sleep(delay)
 
+        sim_end_time = time.time()  # End timer for the run
+        elapsed = sim_end_time - sim_start_time
         self.logger.info("✅ Dynamic simulation complete!")
+        print(f"Total tweets posted in this run: {self.tweet_poster.tweet_count}")
+        print(f"Total time taken to post all tweets: {elapsed:.2f} seconds")
 
 async def main():
     """Completely dynamic main function"""
     # Load configuration dynamically
     config_dir = Path(os.getenv('CONFIG_DIR', 'config'))
 
-    # Debug API key loading
-    api_key = os.getenv('OPENROUTER_API_KEY')
+    # Debug API key loading - changed to GROQ
+    api_key = os.getenv('GROQ_API_KEY')
     if not api_key:
-        logging.error("❌ OpenRouter API key not found in environment")
+        logging.error("❌ Groq API key not found in environment")
+        logging.info("💡 Set your Groq API key: export GROQ_API_KEY=your_key_here")
         return
     else:
         # Only show first few chars for security
         masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
-        logging.info(f"✅ API key found: {masked_key}")
+        logging.info(f"✅ Groq API key found: {masked_key}")
 
     try:
         async with TrenchesAgent(config_dir) as agent:
@@ -893,7 +892,7 @@ async def main():
                 return
 
             agent.logger.info("✅ Connected to Trenches backend")
-            agent.logger.info("🤖 Dynamic LLM mode enabled")
+            agent.logger.info("🤖 Dynamic LLM mode enabled (Groq)")
 
             # Run dynamic simulation
             await agent.run_dynamic_simulation()

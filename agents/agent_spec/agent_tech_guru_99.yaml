@@ -5,7 +5,7 @@ personality:
   decision_bias: logical
   emotionality: low
 llm:
-  model: moonshotai/kimi-k2:free
+  model: llama-3.1-8b-instant
   temperature: 0.6
 activity:
   schedule: "cron: */8 * * * *"
