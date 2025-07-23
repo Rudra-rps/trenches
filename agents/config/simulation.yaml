@@ -1,0 +1,11 @@
+# Simulation Configuration
+rounds: 3
+backend_url: "http://localhost:8080"
+backend_timeout: 5
+round_delay_range: [8, 15]
+agent_delay_range: [1.0, 3.0]
+context_tweets_limit: 5
+max_concurrent_agents: 10
+health_check_timeout: 3
+request_timeout: 5
+

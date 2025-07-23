@@ -1,0 +1,10 @@
+# Core dependencies for Trenches agent simulation
+aiohttp>=3.8.0
+backoff>=2.2.1
+openai>=1.0.0
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# Optional: for enhanced functionality
+requests>=2.28.0
+typing-extensions>=4.0.0

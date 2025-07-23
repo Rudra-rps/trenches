@@ -1,0 +1,28 @@
+# Default values for agent configurations
+personality:
+  temperament: neutral
+  tone: neutral
+  decision_bias: balanced
+  emotionality: medium
+
+llm:
+  model: "llama-3.1-8b-instant"
+  temperature: 0.7
+  max_tokens: 100
+
+activity:
+  actions_per_awake: [1, 2]
+  activity_probability: 0.7
+  active_hours: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+  action_delay_range: [1.0, 3.0]
+  high_activity_modifier: 1.2
+  low_activity_modifier: 0.8
+
+constraints:
+  max_tweet_length: 280
+  min_delay_between_actions: 1.0
+  max_actions_per_round: 3
+
+memory:
+  short_term_window: 50
+  long_term_vector_db: false
