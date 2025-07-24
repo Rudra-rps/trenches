@@ -418,6 +418,59 @@ func main() {
 		c.JSON(http.StatusOK, stats)
 	})
 
+	// Metrics Endpoint
+	r.GET("/metrics", func(c *gin.Context) {
+		var totalTweets int
+		var totalLikes int
+		var totalRetweets int
+		tweetsPerAgent := make(map[string]int)
+
+		// Total tweets
+		err := db.Get(&totalTweets, "SELECT COUNT(*) FROM tweets")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count tweets"})
+			return
+		}
+
+		// Total likes
+		err = db.Get(&totalLikes, "SELECT COALESCE(SUM(likes), 0) FROM tweets")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to sum likes"})
+			return
+		}
+
+		// Total retweets
+		err = db.Get(&totalRetweets, "SELECT COALESCE(SUM(retweets), 0) FROM tweets")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to sum retweets"})
+			return
+		}
+
+		// Tweets per agent
+		rows, err := db.Queryx(`SELECT agent_id, COUNT(*) as count FROM tweets GROUP BY agent_id`)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to group tweets"})
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var agentID string
+			var count int
+			if err := rows.Scan(&agentID, &count); err != nil {
+				continue
+			}
+			tweetsPerAgent[agentID] = count
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"total_tweets":     totalTweets,
+			"total_likes":      totalLikes,
+			"total_retweets":   totalRetweets,
+			"tweets_per_agent": tweetsPerAgent,
+		})
+	})
+
 	// Start server
 	r.Run(":8080")
 }
