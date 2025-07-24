@@ -1,5 +1,5 @@
 # Use official Golang base image
-FROM golang:1.24-alpine
+FROM golang:1.24
 
 # Set working directory inside container
 WORKDIR /app
@@ -13,7 +13,7 @@ RUN go mod download
 COPY . .
 
 # Build the Go app (produces 'app' binary)
-RUN go build -o app main.go
+RUN go build -o app 
 
 # Expose the port your app listens on
 EXPOSE 8080

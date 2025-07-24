@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
+
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 )
@@ -84,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalln("DB connection error:", err)
 	}
+	InitRedis()
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS tweets (
@@ -129,19 +133,51 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
+		// cached Tweet
+		tweetJSON, _ := json.Marshal(tweet)
+		err = RedisClient.Set(ctx, fmt.Sprintf("tweet:%d", tweet.ID), tweetJSON, 5*time.Minute).Err()
+		if err != nil {
+			log.Println("Failed to cache tweet:", err)
+		}
 		logEvent(tweet)
 		c.JSON(http.StatusCreated, gin.H{"status": "tweet posted", "tweet": tweet})
+
+		err = RedisClient.Set(ctx, fmt.Sprintf("tweet:%d", tweet.ID), tweetJSON, 5*time.Minute).Err()
+		RedisClient.Del(ctx, "tweets:recent")
+
 	})
 
-	// Get Tweets
 	r.GET("/tweets", func(c *gin.Context) {
+		cacheKey := "tweets:recent"
+
+		// Check Redis first
+		val, err := RedisClient.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var tweets []Tweet
+			if err := json.Unmarshal([]byte(val), &tweets); err == nil {
+				log.Println("⚡ Serving tweets from Redis cache")
+				c.JSON(http.StatusOK, tweets)
+				return
+			}
+		}
+
+		// If cache miss → hit DB
 		var tweets []Tweet
-		err := db.Select(&tweets, "SELECT * FROM tweets ORDER BY id DESC")
+		err = db.Select(&tweets, "SELECT * FROM tweets ORDER BY id DESC LIMIT 20")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+
+		// Save to Redis for next time
+		bytes, _ := json.Marshal(tweets)
+		RedisClient.Set(ctx, cacheKey, bytes, 1*time.Minute)
+
+		// Also store single tweets individually (optional)
+		for _, tweet := range tweets {
+			CacheTweet(tweet)
+		}
+
 		c.JSON(http.StatusOK, tweets)
 	})
 
@@ -155,6 +191,7 @@ func main() {
 		}
 		logEvent(map[string]any{"action": "like", "tweet_id": id})
 		c.JSON(http.StatusOK, gin.H{"status": "tweet liked"})
+		RedisClient.Del(ctx, fmt.Sprintf("tweet:%s", id))
 	})
 
 	// 👍 Get likes count for a tweet
@@ -179,6 +216,8 @@ func main() {
 		}
 		logEvent(map[string]any{"action": "retweet", "tweet_id": id})
 		c.JSON(http.StatusOK, gin.H{"status": "tweet retweeted"})
+		RedisClient.Del(ctx, fmt.Sprintf("tweet:%s", id))
+
 	})
 
 	// 🔁 Get retweets count for a tweet

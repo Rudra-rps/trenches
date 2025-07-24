@@ -23,6 +23,18 @@ services:
     ports:
       - "7474:7474"
       - "7687:7687"
+  
+  grafana:
+    image: grafana/grafana:10.0.3
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+    depends_on:
+      - postgres
+    volumes:
+      - grafana_data:/var/lib/grafana
 
   backend:
     build:
@@ -38,7 +50,6 @@ services:
       DB_PASSWORD: secret
       DB_NAME: trenches
 
-
 volumes:
   pgdata:
-
+  grafana_data:
