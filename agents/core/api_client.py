@@ -15,6 +15,7 @@ class TrenchesAPIClient:
 
     def __init__(self, config: SimulationConfig):
         self.config = config
+        self.base_url = config.backend_url
         self.session: Optional[aiohttp.ClientSession] = None
         self.logger = logging.getLogger(__name__)
 
@@ -272,3 +273,21 @@ class TrenchesAPIClient:
         except Exception as e:
             self.logger.error(f"Failed to get tweets with stats: {e}")
             return []
+
+    # NEW: Add this method to the class
+    async def save_wallet_snapshot(self, address: str, balance: float, block_number: int) -> bool:
+        """Saves a wallet snapshot to the backend using aiohttp."""
+        payload = {
+            "wallet_address": address,
+            "balance": balance,
+            "block_number": block_number
+        }
+        try:
+            endpoint = f"{self.base_url}/wallet_snapshots"
+            async with self.session.post(endpoint, json=payload) as response:
+                response.raise_for_status()
+                self.logger.info(f"✅ Wallet snapshot saved for {address}")
+                return True
+        except aiohttp.ClientError as e:
+            self.logger.error(f"❌ Failed to save wallet snapshot for {address}: {e}")
+            return False

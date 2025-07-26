@@ -1,15 +1,17 @@
+# tools/onchain_tools.py
 import os
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY")
 
-def get_eth_balance(address: str) -> str:
-    """Fetches the ETH balance for a given wallet address from Etherscan."""
+def get_eth_balance(address: str) -> dict:
+    """
+    Fetches the ETH balance for a given address and returns it as a dictionary.
+    """
     if not ETHERSCAN_API_KEY:
-        return "Error: Etherscan API key not configured."
+        return {"error": "Etherscan API key not configured."}
 
     url = f"https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest&apikey={ETHERSCAN_API_KEY}"
     
@@ -18,11 +20,19 @@ def get_eth_balance(address: str) -> str:
         response.raise_for_status()
         data = response.json()
 
-        if data['status'] == '1':
+        if data.get('status') == '1':
             balance_wei = int(data['result'])
-            balance_eth = balance_wei / 1e18
-            return f"The balance of address {address} is {balance_eth:.4f} ETH."
+            # On success, return a dictionary with the data
+            return {
+                "address": address,
+                "balance_eth": balance_wei / 1e18,
+                "block_number": 0,  # Note: Free tier doesn't provide block number
+                "error": None
+            }
         else:
-            return f"Error from Etherscan API: {data.get('message', 'Unknown error')}"
+            # On API error, return a dictionary with an error message
+            return {"error": data.get('message', 'Unknown Etherscan API error')}
+
     except requests.exceptions.RequestException as e:
-        return f"An HTTP error occurred: {e}"
+        # On connection error, return a dictionary with an error message
+        return {"error": f"An HTTP error occurred: {e}"}

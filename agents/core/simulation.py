@@ -5,7 +5,7 @@ import logging
 import time
 import random
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 from models.config import SimulationConfig, LLMConfig
 from models.entities import Tweet, SimulationContext, ActionType
@@ -35,56 +35,47 @@ class TrenchesSimulation:
         self.prompt_engine = DynamicPromptEngine(config_path)
         self.action_engine = ActionProbabilityEngine(config_path)
         self.llm_client = LLMClient(self.llm_config)
-
-        # API client will be initialized in context manager
         self.api_client: Optional[TrenchesAPIClient] = None
+        self.tools: Dict[str, Callable] = {}
 
         # Runtime state
         self.agents = {}
         self.simulation_stats = {
-            'tweets_posted': 0,
-            'likes_given': 0,
-            'retweets_made': 0,
-            'replies_posted': 0,
-            'start_time': None,
-            'end_time': None
+            'tweets_posted': 0, 'likes_given': 0, 'retweets_made': 0,
+            'replies_posted': 0, 'start_time': None, 'end_time': None
         }
 
         # Setup logging
         log_level = getattr(logging, "INFO")
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+        logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
         self.logger = logging.getLogger(__name__)
 
+    def register_tools(self, tools: Dict[str, Callable]):
+        """Register external tools for the simulation to use."""
+        self.tools = tools
+        self.logger.info(f"Registered tools: {list(self.tools.keys())}")
+
     async def __aenter__(self):
-        """Initialize async components"""
         self.api_client = TrenchesAPIClient(self.sim_config)
         await self.api_client.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Cleanup async components"""
         if self.api_client:
             await self.api_client.__aexit__(exc_type, exc_val, exc_tb)
 
     async def initialize(self):
         """Initialize the simulation"""
-        # Validate API key
         if not self.llm_client.validate_api_key():
             raise ValueError("Invalid or missing Groq API key")
 
-        # Load agents
         self.agents = self.agent_manager.load_all_agents()
         if not self.agents:
             raise ValueError("No agents loaded for simulation")
 
-        # Discover models from agents
         self.llm_config.discover_models_from_agents(self.agents)
         self.logger.info(f"🤖 Discovered models: {', '.join(self.llm_config.available_models)}")
 
-        # Check backend health
         if not await self.api_client.health_check():
             self.logger.error(f"Backend unavailable at {self.sim_config.backend_url}")
             self.logger.info("💡 Start the backend with: cd backend && go run main.go")
@@ -92,13 +83,13 @@ class TrenchesSimulation:
 
         self.logger.info("Connected to Trenches backend")
         self.logger.info(f"Simulation initialized with {len(self.agents)} agents")
-
-        # Create profiles for agents if they don't exist
         await self._ensure_agent_profiles()
 
     async def _ensure_agent_profiles(self):
         """Ensure all agents have profiles in the backend"""
         existing_profiles = await self.api_client.get_profiles()
+        if existing_profiles is None:
+             existing_profiles = []
         existing_usernames = {p.username for p in existing_profiles}
 
         for agent in self.agents.values():
@@ -113,23 +104,16 @@ class TrenchesSimulation:
 
     async def analyze_current_context(self) -> SimulationContext:
         """Analyze current context from backend data"""
-        # Get recent tweets for analysis
         recent_tweets = await self.api_client.get_timeline(
             limit=self.sim_config.context_tweets_limit * 2
         )
-
-        # Use prompt engine to analyze context
         context = self.prompt_engine.analyze_context_from_tweets(recent_tweets)
-
-        self.logger.debug(f"Context analysis: {len(context.trending_topics)} trending topics, "
-                         f"{context.activity_level} activity, {context.sentiment} sentiment")
-
+        self.logger.debug(f"Context analysis: {len(context.trending_topics)} topics, {context.activity_level} activity, {context.sentiment} sentiment")
         return context
 
     async def execute_agent_action(self, agent: Dict, action: str, context: SimulationContext):
         """Execute a specific action for an agent"""
         agent_id = agent.get('id')
-
         try:
             if action == ActionType.TWEET.value:
                 await self._execute_tweet(agent, context)
@@ -141,22 +125,15 @@ class TrenchesSimulation:
                 await self._execute_reply(agent, context)
             else:
                 self.logger.warning(f"Unknown action '{action}' for agent {agent_id}")
-
         except Exception as e:
             self.logger.error(f"[{agent_id}] Failed to execute {action}: {e}")
 
     async def _execute_tweet(self, agent: Dict, context: SimulationContext):
-        """Execute tweet action"""
         agent_id = agent.get('id')
-
-        # Generate content
         prompt = self.prompt_engine.build_dynamic_prompt(agent, "tweet", context)
         content = await self.llm_client.generate_content_async(agent, prompt)
-
-        # Post tweet
         tweet = Tweet(agent_id=agent_id, content=content)
         posted_tweet = await self.api_client.post_tweet(tweet)
-
         if posted_tweet:
             self.simulation_stats['tweets_posted'] += 1
             self.logger.info(f"[{agent_id}] tweeted: {content[:50]}...")
@@ -164,142 +141,111 @@ class TrenchesSimulation:
             self.logger.error(f"[{agent_id}] Failed to post tweet")
 
     async def _execute_like(self, agent: Dict, context: SimulationContext):
-        """Execute like action"""
         agent_id = agent.get('id')
-
-        # Get recent tweets to like
         recent_tweets = await self.api_client.get_timeline(limit=5)
         if not recent_tweets:
             return
-
-        # Filter out own tweets
         other_tweets = [t for t in recent_tweets if t.agent_id != agent_id]
         if not other_tweets:
             return
-
-        # Select a tweet to like (random for now, could be more sophisticated)
         tweet_to_like = random.choice(other_tweets)
-
         success = await self.api_client.like_tweet(tweet_to_like.id)
         if success:
             self.simulation_stats['likes_given'] += 1
             self.logger.info(f"[{agent_id}] liked tweet from @{tweet_to_like.agent_id}")
 
     async def _execute_retweet(self, agent: Dict, context: SimulationContext):
-        """Execute retweet action"""
         agent_id = agent.get('id')
-
-        # Get recent tweets to retweet
         recent_tweets = await self.api_client.get_timeline(limit=5)
         if not recent_tweets:
             return
-
-        # Filter out own tweets
         other_tweets = [t for t in recent_tweets if t.agent_id != agent_id]
         if not other_tweets:
             return
-
-        # Select a tweet to retweet
         tweet_to_retweet = random.choice(other_tweets)
-
         success = await self.api_client.retweet(tweet_to_retweet.id)
         if success:
             self.simulation_stats['retweets_made'] += 1
             self.logger.info(f"[{agent_id}] retweeted from @{tweet_to_retweet.agent_id}")
 
     async def _execute_reply(self, agent: Dict, context: SimulationContext):
-        """Execute reply action"""
         agent_id = agent.get('id')
-
-        # Get recent tweets to reply to
         recent_tweets = await self.api_client.get_timeline(limit=5)
         if not recent_tweets:
             return
-
-        # Filter out own tweets
         other_tweets = [t for t in recent_tweets if t.agent_id != agent_id]
         if not other_tweets:
             return
-
-        # Select a tweet to reply to
         tweet_to_reply = random.choice(other_tweets)
-
-        # Generate reply content
         reply_prompt = self.prompt_engine.build_dynamic_prompt(agent, "reply", context)
         reply_content = await self.llm_client.generate_content_async(agent, reply_prompt)
-
-        # Post reply
         reply = Tweet(agent_id=agent_id, content=reply_content)
         posted_reply = await self.api_client.reply_to_tweet(tweet_to_reply.id, reply)
-
         if posted_reply:
             self.simulation_stats['replies_posted'] += 1
             self.logger.info(f"[{agent_id}] replied to @{tweet_to_reply.agent_id}")
 
     async def simulate_agent(self, agent: Dict, context: SimulationContext):
-        """Simulate a single agent's behavior"""
         agent_id = agent.get('id')
-
-        # Determine number of actions
         activity = agent.get('activity', {})
         action_range = activity.get('actions_per_awake', [1, 2])
         num_actions = random.randint(action_range[0], action_range[1])
-
         for _ in range(num_actions):
-            # Select action based on probabilities
             action = self.action_engine.select_action(agent, context)
-
-            # Execute action
             await self.execute_agent_action(agent, action, context)
-
-            # Delay between actions if multiple
             if num_actions > 1:
                 delay_range = activity.get('action_delay_range', self.sim_config.agent_delay_range)
                 delay = random.uniform(delay_range[0], delay_range[1])
                 await asyncio.sleep(delay)
 
+    async def _run_onchain_snapshot(self):
+        """Runs automatically each round to fetch and save on-chain data."""
+        self.logger.info("--- Starting On-chain Snapshot ---")
+        wallets_to_watch = [
+            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "0xbe0eb53f46cd790cd13851d5eff43d12404d33e8"
+        ]
+        check_balance_tool = self.tools.get("get_eth_balance")
+        if not check_balance_tool:
+            self.logger.error("'get_eth_balance' tool not registered. Skipping snapshot.")
+            return
+        for address in wallets_to_watch:
+            result = check_balance_tool(address)
+            if result and not result.get("error"):
+                await self.api_client.save_wallet_snapshot(
+                    address=result["address"],
+                    balance=result["balance_eth"],
+                    block_number=result["block_number"]
+                )
+            else:
+                self.logger.warning(f"Could not fetch balance for {address}: {result.get('error', 'Unknown error')}")
+        self.logger.info("--- On-chain Snapshot Complete ---")
+
     async def run_simulation_round(self, round_num: int):
         """Run a single simulation round"""
         self.logger.info(f"\nRound {round_num + 1}/{self.sim_config.rounds}")
-
-        # Analyze current context
+        await self._run_onchain_snapshot()
         context = await self.analyze_current_context()
-
-        # Select active agents
         active_agents = self.agent_manager.select_active_agents(
-            self.agents,
-            context,
-            self.sim_config.max_concurrent_agents
+            self.agents, context, self.sim_config.max_concurrent_agents
         )
         self.logger.info(f"{len(active_agents)} agents selected for this round")
-
-        # Run agents concurrently
-        tasks = [
-            self.simulate_agent(agent, context)
-            for agent in active_agents
-        ]
-
+        tasks = [self.simulate_agent(agent, context) for agent in active_agents]
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run_simulation(self):
         """Run the complete simulation"""
         self.simulation_stats['start_time'] = time.time()
-
         try:
             await self.initialize()
-
             for round_num in range(self.sim_config.rounds):
                 await self.run_simulation_round(round_num)
-
-                # Delay between rounds
                 if round_num < self.sim_config.rounds - 1:
                     delay = random.randint(*self.sim_config.round_delay_range)
                     self.logger.info(f"Waiting {delay}s before next round...")
                     await asyncio.sleep(delay)
-
             self.simulation_stats['end_time'] = time.time()
             await self._print_final_stats()
-
         except Exception as e:
             self.logger.error(f"Simulation failed: {e}")
             raise
@@ -307,21 +253,18 @@ class TrenchesSimulation:
     async def _print_final_stats(self):
         """Print final simulation statistics"""
         elapsed = self.simulation_stats['end_time'] - self.simulation_stats['start_time']
-
         self.logger.info("\nSimulation completed!")
         self.logger.info(f"Final Statistics:")
-        self.logger.info(f"   • Tweets posted: {self.simulation_stats['tweets_posted']}")
-        self.logger.info(f"   • Likes given: {self.simulation_stats['likes_given']}")
-        self.logger.info(f"   • Retweets made: {self.simulation_stats['retweets_made']}")
-        self.logger.info(f"   • Replies posted: {self.simulation_stats['replies_posted']}")
-        self.logger.info(f"   • Total time: {elapsed:.2f} seconds")
-
-        # Get backend stats
+        self.logger.info(f"  • Tweets posted: {self.simulation_stats['tweets_posted']}")
+        self.logger.info(f"  • Likes given: {self.simulation_stats['likes_given']}")
+        self.logger.info(f"  • Retweets made: {self.simulation_stats['retweets_made']}")
+        self.logger.info(f"  • Replies posted: {self.simulation_stats['replies_posted']}")
+        self.logger.info(f"  • Total time: {elapsed:.2f} seconds")
         try:
             agent_stats = await self.api_client.get_agent_stats()
             if agent_stats:
                 self.logger.info(f"📈 Backend agent stats:")
-                for stat in agent_stats[:5]:  # Top 5
-                    self.logger.info(f"   • @{stat.agent_id}: {stat.total_likes} likes, {stat.total_retweets} retweets")
+                for stat in agent_stats[:5]:
+                    self.logger.info(f"  • @{stat.agent_id}: {stat.total_likes} likes, {stat.total_retweets} retweets")
         except Exception as e:
             self.logger.warning(f"Failed to get backend stats: {e}")
