@@ -59,6 +59,14 @@ type Profile struct {
 	Metadata JSONB  `db:"metadata" json:"metadata"`
 }
 
+type WalletSnapshot struct {
+	ID            int       `db:"id" json:"id"`
+	WalletAddress string    `db:"wallet_address" json:"wallet_address"`
+	Balance       float64   `db:"balance" json:"balance"`
+	BlockNumber   int64     `db:"block_number" json:"block_number"`
+	Timestamp     time.Time `db:"timestamp" json:"timestamp"`
+}
+
 var db *sqlx.DB
 
 func logEvent(event any) {
@@ -105,6 +113,15 @@ func main() {
 		avatar TEXT,
 		metadata JSONB
 	);
+
+	CREATE TABLE IF NOT EXISTS wallet_snapshots (
+		id SERIAL PRIMARY KEY,
+		wallet_address TEXT NOT NULL,
+		balance NUMERIC,
+		block_number BIGINT,
+		timestamp TIMESTAMP DEFAULT NOW()
+	);
+	
 	`
 	db.MustExec(schema)
 
@@ -510,6 +527,37 @@ func main() {
 		})
 	})
 
+	// --- WALLET SNAPSHOTS ---
+	r.POST("/wallet_snapshots", func(c *gin.Context) {
+		var ws WalletSnapshot
+		if err := c.ShouldBindJSON(&ws); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		_, err := db.Exec(`INSERT INTO wallet_snapshots (wallet_address, balance, block_number) VALUES ($1, $2, $3)`,
+			ws.WalletAddress, ws.Balance, ws.BlockNumber,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "snapshot saved"})
+	})
+
+	r.GET("/wallet_snapshots/:wallet", func(c *gin.Context) {
+		wallet := c.Param("wallet")
+		var snapshots []WalletSnapshot
+		err := db.Select(&snapshots, "SELECT * FROM wallet_snapshots WHERE wallet_address=$1 ORDER BY timestamp DESC", wallet)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if snapshots == nil {
+			snapshots = []WalletSnapshot{}
+		}
+		c.JSON(http.StatusOK, snapshots)
+	})
 	// Start server
 	r.Run(":8080")
 }
