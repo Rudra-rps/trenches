@@ -36,3 +36,31 @@ def get_eth_balance(address: str) -> dict:
     except requests.exceptions.RequestException as e:
         # On connection error, return a dictionary with an error message
         return {"error": f"An HTTP error occurred: {e}"}
+    
+    # Function to get the last 5 transactions
+def get_latest_transactions(address: str) -> dict:
+    """Fetches the 5 most recent transactions for a given address."""
+    if not ETHERSCAN_API_KEY:
+        return {"error": "Etherscan API key not configured."}
+    url = f"https://api.etherscan.io/api?module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=5&sort=desc&apikey={ETHERSCAN_API_KEY}"
+    try:
+        data = requests.get(url).json()
+        if data.get('status') == '1':
+            return {"transactions": data['result'], "error": None}
+        return {"error": data.get('message', 'Unknown Etherscan API error')}
+    except requests.exceptions.RequestException as e:
+        return {"error": f"An HTTP error occurred: {e}"}
+    
+    # Function to get the last 5 token transfers
+def get_erc20_transfers(address: str) -> dict:
+    """Fetches the 5 most recent ERC-20 token transfers for a given address."""
+    if not ETHERSCAN_API_KEY:
+        return {"error": "Etherscan API key not configured."}
+    url = f"https://api.etherscan.io/api?module=account&action=tokentx&address={address}&page=1&offset=5&startblock=0&endblock=99999999&sort=desc&apikey={ETHERSCAN_API_KEY}"
+    try:
+        data = requests.get(url).json()
+        if data.get('status') == '1':
+            return {"transfers": data['result'], "error": None}
+        return {"error": data.get('message', 'Unknown Etherscan API error')}
+    except requests.exceptions.RequestException as e:
+        return {"error": f"An HTTP error occurred: {e}"}

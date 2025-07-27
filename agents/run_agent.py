@@ -8,6 +8,8 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from tools.onchain_tools import get_eth_balance, get_latest_transactions, get_erc20_transfers
+from tools.market_data_tools import get_crypto_prices
 
 # Add the current directory to Python path to fix relative imports
 sys.path.append(str(Path(__file__).parent))
@@ -44,7 +46,10 @@ async def main():
 
     # Define the dictionary of available tools
     tools = {
-        "get_eth_balance": get_eth_balance
+        "get_eth_balance": get_eth_balance,
+        "get_latest_transactions": get_latest_transactions,
+        "get_erc20_transfers": get_erc20_transfers,
+        "get_crypto_prices": get_crypto_prices
     }
     
     try:
