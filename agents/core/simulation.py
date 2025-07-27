@@ -16,6 +16,7 @@ from core.prompt_engine import DynamicPromptEngine
 from core.action_engine import ActionProbabilityEngine
 from core.llm_client import LLMClient
 from core.agent_manager import AgentManager
+import json
 
 
 class TrenchesSimulation:
@@ -113,18 +114,51 @@ class TrenchesSimulation:
             elif action == ActionType.RETWEET.value:
                 await self._execute_retweet(agent, context)
             elif action == ActionType.REPLY.value:
-                await self._execute_reply(agent, context)
+                await self._execute_tweet(agent, context)
             else:
                 self.logger.warning(f"Unknown action '{action}' for agent {agent_id}")
         except Exception as e:
             self.logger.error(f"[{agent_id}] Failed to execute {action}: {e}")
 
+    # In core/simulation.py
+
     async def _execute_tweet(self, agent: Dict, context: SimulationContext):
+        """Execute tweet action with a potential tool-use loop."""
         agent_id = agent.get('id')
+
+        # 1. First "thought" pass: Ask the LLM to decide on an action (tweet or tool use)
         prompt = self.prompt_engine.build_dynamic_prompt(agent, "tweet", context)
-        content = await self.llm_client.generate_content_async(agent, prompt)
+        thought = await self.llm_client.generate_content_async(agent, prompt)
+
+        try:
+            # 2. Check if the thought is a tool call by attempting to parse it as JSON
+            tool_call = json.loads(thought)
+            tool_name = tool_call.get("tool_name")
+            tool_args = tool_call.get("args", {})
+
+            if tool_name in self.tools:
+                self.logger.info(f"[{agent_id}] decided to use tool: {tool_name} with args {tool_args}")
+                
+                # 3. Execute the tool
+                tool_function = self.tools[tool_name]
+                tool_result = tool_function(**tool_args)
+                self.logger.info(f"[{agent_id}] got tool result: {tool_result}")
+
+                # 4. Second pass: Feed the result back to the LLM to generate the final tweet
+                final_prompt = self.prompt_engine.build_dynamic_prompt(agent, "tweet", context, tool_result=tool_result)
+                content = await self.llm_client.generate_content_async(agent, final_prompt)
+            else:
+                # If the JSON doesn't match a known tool, generate a default response
+                content = "I was thinking about using a tool, but changed my mind."
+
+        except (json.JSONDecodeError, AttributeError):
+            # 5. If it's not JSON, it's a direct tweet
+            content = thought
+
+        # 6. Post the final tweet
         tweet = Tweet(agent_id=agent_id, content=content)
         posted_tweet = await self.api_client.post_tweet(tweet)
+
         if posted_tweet:
             self.simulation_stats['tweets_posted'] += 1
             self.logger.info(f"[{agent_id}] tweeted: {content[:50]}...")

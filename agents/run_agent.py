@@ -10,6 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tools.onchain_tools import get_eth_balance, get_latest_transactions, get_erc20_transfers
 from tools.market_data_tools import get_crypto_prices
+from tools.market_data_tools import get_token_price
 
 # Add the current directory to Python path to fix relative imports
 sys.path.append(str(Path(__file__).parent))
@@ -41,6 +42,12 @@ async def main():
         logger.error("Etherscan API key not found in environment.")
         return
     logger.info("Etherscan API key found.")
+    
+    # NEW: Validate Coinranking API key
+    if not os.getenv('COINRANKING_API_KEY'):
+        logger.error("Coinranking API key not found.")
+        return
+    logger.info("Coinranking API key found.")
 
     config_dir = Path(os.getenv('CONFIG_DIR', 'config'))
 
@@ -49,7 +56,8 @@ async def main():
         "get_eth_balance": get_eth_balance,
         "get_latest_transactions": get_latest_transactions,
         "get_erc20_transfers": get_erc20_transfers,
-        "get_crypto_prices": get_crypto_prices
+        "get_crypto_prices": get_crypto_prices,
+        "get_token_price": get_token_price,
     }
     
     try:

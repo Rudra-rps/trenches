@@ -23,6 +23,8 @@ class DynamicPromptEngine:
 
 {personality_description}
 
+{tools_section}
+
 {context_section}
 
 {instruction_section}
@@ -120,7 +122,7 @@ Your response:""",
 
         return default_analyzers
 
-    def build_dynamic_prompt(self, agent: Dict, action_type: str, context: SimulationContext = None) -> str:
+    def build_dynamic_prompt(self, agent: Dict, action_type: str, context: SimulationContext = None, tool_result: str = None) -> str:
         """Build completely dynamic prompt based on agent and context"""
         agent_id = agent.get('id', 'Agent')
         personality = agent.get('personality', {})
@@ -182,6 +184,15 @@ Your response:""",
 
         context_section = "\n".join(context_parts) if context_parts else ""
 
+         # --- NEW: Tools Section ---
+        # This section describes the available tools to the LLM.
+        tools_description = """
+        You have access to the following tools. To use a tool, respond with ONLY a JSON object in the format: {"tool_name": "name", "args": {"arg_name": "value"}}.
+
+            Available Tools:
+            - get_token_price(symbol: str): Use this to get the current price of a cryptocurrency. Example symbols: "ETH", "BTC".
+        """
+
         # Build instruction section based on action type
         instruction_map = {
             "tweet": "Generate an original tweet that reflects your personality and current context. Be engaging and authentic.",
@@ -189,7 +200,16 @@ Your response:""",
             "retweet": "Consider whether this content aligns with your personality and if you would share it with your followers.",
             "like": "Consider liking content that resonates with your personality and interests."
         }
-        instruction_section = instruction_map.get(action_type, "Generate appropriate content")
+        #INSTRUCTION_SECTION 
+        if tool_result:
+            # This is the instruction for AFTER a tool has been used.
+            # It tells the agent to generate a final response using the new information.
+            instruction_section = f"You previously decided to use a tool and got this result: '{tool_result}'. Now, based on this information and the context, generate a tweet."
+        else:
+            # This is the default instruction for the agent's "thinking" step.
+            # It asks the agent to choose between tweeting directly or using a tool.
+            instruction_section = "Based on your personality and the current context, decide your next action. You can either generate an original tweet directly, or use one of the available tools if you need more information."
+        
 
         # Build constraints section
         constraints = []
@@ -206,7 +226,8 @@ Your response:""",
             personality_description=personality_description,
             context_section=context_section,
             instruction_section=instruction_section,
-            constraints_section=constraints_section
+            constraints_section=constraints_section,
+            tools_section=tools_description,
         )
 
     def analyze_context_from_tweets(self, tweets: List[Tweet]) -> SimulationContext:

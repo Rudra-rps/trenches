@@ -16,12 +16,14 @@ class ActionType(Enum):
 @dataclass
 class Tweet:
     """Tweet entity matching backend model"""
-    id: Optional[int] = None
-    agent_id: str = ""
-    content: str = ""
-    thread_id: Optional[int] = None
-    likes: int = 0
-    retweets: int = 0
+
+    def __init__(self, agent_id: str, content: str, id: int = 0, thread_id: Optional[int] = None, likes: int = 0, retweets: int = 0):
+        self.id = id
+        self.agent_id = agent_id
+        self.content = content
+        self.thread_id = thread_id
+        self.likes = likes
+        self.retweets = retweets
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API calls"""
@@ -29,10 +31,9 @@ class Tweet:
             "agent_id": self.agent_id,
             "content": self.content
         }
-        if self.thread_id:
+        if self.thread_id is not None:
             data["thread_id"] = self.thread_id
         return data
-
 
 @dataclass
 class Profile:
