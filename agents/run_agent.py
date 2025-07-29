@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from tools.onchain_tools import get_eth_balance, get_latest_transactions, get_erc20_transfers
 from tools.market_data_tools import get_crypto_prices
 from tools.market_data_tools import get_token_price
+from tools.liquidity import get_liquidity_pool_info
+from tools.orderbook import get_order_book
 
 # Add the current directory to Python path to fix relative imports
 sys.path.append(str(Path(__file__).parent))
@@ -58,6 +60,8 @@ async def main():
         "get_erc20_transfers": get_erc20_transfers,
         "get_crypto_prices": get_crypto_prices,
         "get_token_price": get_token_price,
+        "get_liquidity_pool_info": get_liquidity_pool_info,
+         "get_order_book": get_order_book,
     }
     
     try:
