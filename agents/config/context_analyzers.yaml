@@ -1,0 +1,63 @@
+# Context analysis configuration
+sentiment_keywords:
+  positive:
+    - "great"
+    - "awesome"
+    - "love"
+    - "amazing"
+    - "wonderful"
+    - "excellent"
+    - "fantastic"
+    - "brilliant"
+    - "exciting"
+    - "happy"
+  negative:
+    - "terrible"
+    - "awful"
+    - "hate"
+    - "horrible"
+    - "disappointing"
+    - "failed"
+    - "worst"
+    - "bad"
+    - "annoying"
+    - "frustrated"
+
+activity_thresholds:
+  high: 10
+  medium: 5
+  low: 2
+
+stop_words:
+  - "the"
+  - "and"
+  - "or"
+  - "but"
+  - "in"
+  - "on"
+  - "at"
+  - "to"
+  - "for"
+  - "of"
+  - "with"
+  - "by"
+  - "a"
+  - "an"
+  - "is"
+  - "are"
+  - "was"
+  - "were"
+  - "this"
+  - "that"
+  - "it"
+  - "be"
+  - "have"
+  - "has"
+  - "will"
+  - "would"
+  - "could"
+  - "should"
+
+min_trend_frequency: 2
+max_trending_topics: 8
+max_recent_tweets_context: 3

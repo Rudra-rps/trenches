@@ -1,0 +1,25 @@
+# Agent Schema Validation
+required:
+  - id
+  - personality
+  - llm
+  - activity
+
+field_types:
+  id: str
+  personality: dict
+  llm: dict
+  activity: dict
+
+personality_fields:
+  - temperament
+  - tone
+  - decision_bias
+  - emotionality
+
+llm_fields:
+  - model
+  - temperature
+
+activity_fields:
+  - actions_per_awake

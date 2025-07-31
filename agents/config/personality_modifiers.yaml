@@ -1,0 +1,36 @@
+# Personality-based action probability modifiers
+analytical:
+  tweet: 1.3
+  like: 0.5
+  retweet: 0.3
+  reply: 0.8
+
+sarcastic:
+  tweet: 1.2
+  like: 0.5
+  retweet: 0.7
+  reply: 1.5
+
+optimistic:
+  tweet: 0.8
+  like: 1.5
+  retweet: 1.2
+  reply: 0.8
+
+playful:
+  tweet: 1.3
+  like: 0.8
+  retweet: 0.5
+  reply: 1.2
+
+contemplative:
+  tweet: 1.5
+  like: 0.3
+  retweet: 0.2
+  reply: 0.4
+
+neutral:
+  tweet: 1.0
+  like: 1.0
+  retweet: 1.0
+  reply: 1.0

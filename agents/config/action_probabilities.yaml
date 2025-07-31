@@ -1,0 +1,6 @@
+# Base action probabilities
+tweet: 0.6
+like: 0.2
+retweet: 0.15
+reply: 0.05
+

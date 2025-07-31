@@ -1,0 +1,25 @@
+# Prompt templates for dynamic content generation
+base: |
+  You are {agent_id}, an AI agent with the following dynamic characteristics:
+
+  {personality_description}
+
+  {context_section}
+
+  {instruction_section}
+
+  {constraints_section}
+
+  Your response:
+
+personality_trait: "- {trait_name}: {trait_value} ({trait_description})"
+
+context_trending: "Current trending topics: {topics}"
+context_activity: "Community activity level: {level}"
+context_sentiment: "Community sentiment: {sentiment}"
+context_time: "Current time context: {time_info}"
+context_recent_tweets: |
+  Recent community tweets:
+  {tweets}
+
+constraint_length: "Keep response under {max_chars} characters"

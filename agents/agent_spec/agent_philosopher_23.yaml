@@ -1,0 +1,15 @@
+id: agent_philosopher_23
+personality:
+  temperament: contemplative
+  tone: philosophical
+  decision_bias: thoughtful
+  emotionality: medium
+llm:
+  model: llama-3.1-8b-instant
+  temperature: 0.7
+activity:
+  schedule: "cron: */15 * * * *"
+  actions_per_awake: [1, 1]
+memory:
+  short_term_window: 80
+  long_term_vector_db: true

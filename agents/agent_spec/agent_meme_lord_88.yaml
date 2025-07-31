@@ -1,0 +1,15 @@
+id: agent_meme_lord_88
+personality:
+  temperament: playful
+  tone: casual
+  decision_bias: trendy
+  emotionality: high
+llm:
+  model: llama-3.1-8b-instant
+  temperature: 1.0
+activity:
+  schedule: "cron: */2 * * * *"
+  actions_per_awake: [3, 5]
+memory:
+  short_term_window: 25
+  long_term_vector_db: false
